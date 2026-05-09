@@ -7,4 +7,7 @@ export function initToolbar(): void {
   document
     .getElementById("btn-clear")!
     .addEventListener("click", () => events.emit("clear", undefined));
+  document
+    .getElementById("btn-save")!
+    .addEventListener("click", () => events.emit("save", undefined));
 }

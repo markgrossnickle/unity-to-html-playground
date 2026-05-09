@@ -8,6 +8,7 @@ export interface EventMap {
   "color:select": string; // hex
   undo: void;
   clear: void;
+  save: void;
   "recent:update": void;
 }
 

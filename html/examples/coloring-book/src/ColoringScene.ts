@@ -4,6 +4,7 @@ import { events } from "./events";
 import { FillRenderer } from "./FillRenderer";
 import { LabelMap } from "./LabelMap";
 import { findPicture, PICTURES, type Picture } from "./pictures";
+import { exportPng, saveOrShare } from "./save";
 import {
   addRecentColor,
   popFill,
@@ -45,6 +46,9 @@ export class ColoringScene extends Phaser.Scene {
     events.on("picture:select", (slug) => this.loadPicture(slug));
     events.on("undo", () => this.undo());
     events.on("clear", () => this.clearPaint());
+    events.on("save", () => {
+      void this.save();
+    });
 
     // pointerdown — not pointerup or drag — so a real "tap" registers and a
     // panning gesture (when we add zoom in M3) won't accidentally fill.
@@ -141,6 +145,21 @@ export class ColoringScene extends Phaser.Scene {
     state.fillMap = new Map();
     state.history = [];
     this.redraw();
+  }
+
+  private async save(): Promise<void> {
+    if (!this.currentPicture || !this.fillRenderer || !this.labelMap) return;
+    const linesSrc = this.textures
+      .get(`${this.currentPicture.slug}-lines`)
+      .getSourceImage() as HTMLImageElement;
+    const blob = await exportPng({
+      slug: this.currentPicture.slug,
+      width: this.labelMap.width,
+      height: this.labelMap.height,
+      fillCanvas: this.fillRenderer.canvas,
+      linesImage: linesSrc,
+    });
+    await saveOrShare(this.currentPicture.slug, blob);
   }
 
   private redraw(): void {
