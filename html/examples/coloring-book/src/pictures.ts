@@ -27,6 +27,18 @@ import mermaidLines from "../assets/mermaid_lines.png?url";
 import mermaidLabels from "../assets/mermaid_labels.png?url";
 import unicornLines from "../assets/unicorn_lines.png?url";
 import unicornLabels from "../assets/unicorn_labels.png?url";
+// Auto-parsed subjects — line-art PNG → parser → lines/labels pair.
+// Source PNGs live in ../source-art/, regenerate via `npm run gen-autoparsed-assets`.
+import butterflyLines from "../assets/butterfly_lines.png?url";
+import butterflyLabels from "../assets/butterfly_labels.png?url";
+import rocketLines from "../assets/rocket_lines.png?url";
+import rocketLabels from "../assets/rocket_labels.png?url";
+import cakeLines from "../assets/cake_lines.png?url";
+import cakeLabels from "../assets/cake_labels.png?url";
+import dragonLines from "../assets/dragon_lines.png?url";
+import dragonLabels from "../assets/dragon_labels.png?url";
+import whaleLines from "../assets/whale_lines.png?url";
+import whaleLabels from "../assets/whale_labels.png?url";
 
 export interface Picture {
   slug: string;
@@ -78,6 +90,36 @@ export const PICTURES: Picture[] = [
     title: "Unicorn",
     linesUrl: unicornLines,
     labelsUrl: unicornLabels,
+  },
+  {
+    slug: "butterfly",
+    title: "Butterfly",
+    linesUrl: butterflyLines,
+    labelsUrl: butterflyLabels,
+  },
+  {
+    slug: "rocket",
+    title: "Rocket",
+    linesUrl: rocketLines,
+    labelsUrl: rocketLabels,
+  },
+  {
+    slug: "cake",
+    title: "Birthday Cake",
+    linesUrl: cakeLines,
+    labelsUrl: cakeLabels,
+  },
+  {
+    slug: "dragon",
+    title: "Dragon",
+    linesUrl: dragonLines,
+    labelsUrl: dragonLabels,
+  },
+  {
+    slug: "whale",
+    title: "Whale",
+    linesUrl: whaleLines,
+    labelsUrl: whaleLabels,
   },
 ];
 
