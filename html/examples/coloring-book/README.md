@@ -109,6 +109,19 @@ hand-drawn region AND NOT under an outline pixel as the background region
 (label id `255`). Both PNGs in each pair are deterministic, so re-running
 the script over a clean checkout produces a no-op git diff.
 
+### Overlapping shapes → distinct sub-regions
+
+The generator builds the label map by giving each *source shape* a unique
+bit index (0..29) and ORing that bit into a 32-bit-per-pixel buffer. After
+all shapes are drawn it walks the buffer, collects every distinct non-zero
+bitmask, and assigns each one a sequential region id. So when two shapes
+overlap, the overlap zone is its OWN region — a flower with overlapping
+petals has lens-shaped sub-regions you can fill independently, fish scales
+get crescent intersections between adjacent circles, and so on. Subjects
+whose shapes happen not to overlap (e.g. star, house, robot) come out
+byte-identical to the pre-bitmask output. See the header comment in
+`scripts/generate-coloring-assets.mjs` for the full mechanism.
+
 ## Layout
 
 ```

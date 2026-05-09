@@ -12,21 +12,45 @@
 //       This image is never displayed; it's loaded into an off-screen ImageData
 //       at runtime and sampled at the tap point to convert (x,y) → regionId.
 //
-// Subjects (each chosen to give the player a satisfyingly distinct set of
-// regions, none too small to tap on a phone):
-//   apple    — body, stem, leaf, highlight                            (4 regions)
-//   house    — sky, walls, roof, door, two windows                    (6 regions)
-//   star     — five outer points + center pentagon                    (6 regions)
-//   cat      — body, head, two ears, two eyes, nose, tail             (8 regions)
-//   fish     — body, top fin, bottom fin, tail fin, eye, scales       (6 regions)
-//   balloon  — sky, three balloon stripes, basket                     (5 regions)
-//   cupcake  — three frosting layers, wrapper, cherry                 (5 regions)
-//   robot    — body, two arms, head, two eyes, antenna ball           (7 regions)
-//   sailboat — sky, water, hull, two sails, sun                       (6 regions)
-//   flower   — stem, leaf, five petals, center                        (8 regions)
-//   wolf     — node-canvas portrait, 12 regions
-//   mermaid  — node-canvas figure, 16 regions (incl. 4 bubbles)
-//   unicorn  — node-canvas profile, 14 regions
+// ---- Overlap-aware region authoring ----
+//
+// The label map is assembled in two passes. Pass 1: each *source shape* (one
+// fillEllipse, fillPolygon, paintShape, …) gets a unique BIT INDEX — drawing
+// ORs that bit into a 32-bit-per-pixel buffer instead of overwriting an id.
+// Pass 2: walk the buffer, collect every distinct non-zero bitmask, and
+// assign each one a sequential region id (1..254, skipping 255 which the
+// background pass reserves).
+//
+// Why bitmasks? When two shapes overlap, the overlap zone is its own
+// region — naturally distinct from either source. A flower with overlapping
+// petals gets lens-shaped sub-regions you can fill independently; fish
+// scales get crescent intersections. Under the old approach (write the id
+// directly), the overlap pixels just took on whichever shape was drawn last.
+//
+// Constraints:
+//   * 30 source-shape bits per subject (32-bit int, with a couple to spare).
+//     If a subject ever needs more, split it into "shape groups": shapes
+//     within a group still overwrite each other, but groups can overlap
+//     each other to form intersection regions. (Not needed today — the
+//     biggest subject, mermaid, has 18 shapes.)
+//   * Region id 255 is reserved for the auto-added background. Pictures
+//     with > 254 distinct overlap masks would overflow; current art is far
+//     from that ceiling.
+//
+// Subjects (regions are dynamic now — counts include overlap sub-regions):
+//   apple    — body, stem, leaf, highlight (lens on body)             (~5 regions)
+//   house    — sky, walls, roof, door, two windows                    (~6 regions)
+//   star     — five outer points + center pentagon (no overlap)       (6 regions)
+//   cat      — body, head, two ears, two eyes, nose, tail             (~10 regions)
+//   fish     — body, fins, eye, ROW OF OVERLAPPING SCALES             (~15 regions)
+//   balloon  — sky, three balloon stripes, basket                     (~5 regions)
+//   cupcake  — three frosting layers, wrapper, cherry                 (~8 regions)
+//   robot    — body, two arms, head, two eyes, antenna ball           (~8 regions)
+//   sailboat — sky, water, hull, two sails, sun                       (~7 regions)
+//   flower   — stem, leaf, FIVE OVERLAPPING PETALS + center           (~17 regions)
+//   wolf     — node-canvas portrait                                   (~20 regions)
+//   mermaid  — node-canvas figure (incl. 4 bubbles)                   (~25 regions)
+//   unicorn  — node-canvas profile                                    (~20 regions)
 //
 // Plus an automatically-added "background" region on every picture: every
 // pixel that's NOT inside another colorable region AND NOT directly under an
@@ -79,73 +103,6 @@ function fillRect(img, x0, y0, w, h, c) {
     for (let x = Math.max(0, x0); x < xEnd; x++) setPx(img, x, y, c);
 }
 
-function fillEllipse(img, cx, cy, rx, ry, c) {
-  const rx2 = rx * rx;
-  const ry2 = ry * ry;
-  const minY = Math.max(0, Math.floor(cy - ry));
-  const maxY = Math.min(img.height - 1, Math.ceil(cy + ry));
-  for (let y = minY; y <= maxY; y++) {
-    const dy = y - cy;
-    const span = Math.sqrt(Math.max(0, rx2 * (1 - (dy * dy) / ry2)));
-    const minX = Math.max(0, Math.floor(cx - span));
-    const maxX = Math.min(img.width - 1, Math.ceil(cx + span));
-    for (let x = minX; x <= maxX; x++) {
-      const dx = x - cx;
-      // tighter inside-ellipse test to avoid corner pixels bleeding
-      if ((dx * dx) / rx2 + (dy * dy) / ry2 <= 1) setPx(img, x, y, c);
-    }
-  }
-}
-
-// Like fillEllipse but only fills pixels where yMin <= y < yMax. Used to slice
-// an ellipse into horizontal stripes (balloon, swirly frosting).
-function fillEllipseSlab(img, cx, cy, rx, ry, yMin, yMax, c) {
-  const rx2 = rx * rx;
-  const ry2 = ry * ry;
-  const minY = Math.max(yMin, Math.max(0, Math.floor(cy - ry)));
-  const maxY = Math.min(yMax - 1, Math.min(img.height - 1, Math.ceil(cy + ry)));
-  for (let y = minY; y <= maxY; y++) {
-    const dy = y - cy;
-    const span = Math.sqrt(Math.max(0, rx2 * (1 - (dy * dy) / ry2)));
-    const minX = Math.max(0, Math.floor(cx - span));
-    const maxX = Math.min(img.width - 1, Math.ceil(cx + span));
-    for (let x = minX; x <= maxX; x++) {
-      const dx = x - cx;
-      if ((dx * dx) / rx2 + (dy * dy) / ry2 <= 1) setPx(img, x, y, c);
-    }
-  }
-}
-
-// Even-odd scanline fill; vertices may be fractional. Works for convex and
-// simple concave polygons (the only kinds we author here).
-function fillPolygon(img, points, c) {
-  let minY = Infinity;
-  let maxY = -Infinity;
-  for (const [, y] of points) {
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-  minY = Math.max(0, Math.floor(minY));
-  maxY = Math.min(img.height - 1, Math.ceil(maxY));
-  for (let y = minY; y <= maxY; y++) {
-    const xs = [];
-    for (let i = 0; i < points.length; i++) {
-      const [x1, y1] = points[i];
-      const [x2, y2] = points[(i + 1) % points.length];
-      // strict-on-one-side comparison handles vertices on the scanline
-      if ((y1 > y) !== (y2 > y)) {
-        xs.push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
-      }
-    }
-    xs.sort((a, b) => a - b);
-    for (let i = 0; i + 1 < xs.length; i += 2) {
-      const x0 = Math.max(0, Math.ceil(xs[i]));
-      const x1 = Math.min(img.width - 1, Math.floor(xs[i + 1]));
-      for (let x = x0; x <= x1; x++) setPx(img, x, y, c);
-    }
-  }
-}
-
 // Bresenham line that stamps a (thick × thick) square at every step. Sharp
 // pixels — no AA — which is exactly what we want for a label-map outline
 // reference, and is fine visually for this simple style.
@@ -192,7 +149,7 @@ function strokeRect(img, x, y, w, h, c, thick) {
 
 // Horizontal chord across an ellipse at y, drawn as a thick stroke. Used for
 // the balloon stripe separators (outline-only — the regions are already split
-// in the labels via fillEllipseSlab).
+// in the labels via fillEllipseSlabBit).
 function drawEllipseChord(img, cx, cy, rx, ry, y, c, thick) {
   const dy = y - cy;
   if (Math.abs(dy) > ry) return;
@@ -225,14 +182,198 @@ function strokeEllipse(img, cx, cy, rx, ry, c, thick) {
 // ---------- color helpers ----------
 
 const BLACK = [0, 0, 0, 255];
-// Region color in labels PNG: id encoded into R channel, alpha=255.
-// At runtime: regionId = labels[idx].r (when labels[idx].a > 0).
-const id = (n) => [n, 0, 0, 255];
+
+// ---------- bitmask label buffer ----------
+//
+// `Mask` mirrors the PNG-shape (`width`, `height`, `data`) but its `data` is a
+// Uint32Array — one cell per pixel — so each fill primitive ORs in a shape's
+// bit instead of overwriting an id byte. We keep the geometry routines almost
+// identical to the byte-writing versions; only the per-pixel write differs.
+//
+// 32-bit JS bitwise ops treat the high bit as a sign bit, so we cap shape
+// counts at 30 and treat the result as a Uint32 (the typed array stores it
+// unsigned regardless). MAX_BITS=30 gives every current subject room to
+// breathe; bumping past 30 needs the "shape groups" treatment.
+
+const MAX_BITS = 30;
+
+function makeMask(w, h) {
+  return { width: w, height: h, data: new Uint32Array(w * h) };
+}
+
+function bitFor(shapeIndex) {
+  if (shapeIndex < 0 || shapeIndex >= MAX_BITS) {
+    throw new Error(
+      `shape index ${shapeIndex} out of range — split into shape groups (max ${MAX_BITS} per subject)`
+    );
+  }
+  return 1 << shapeIndex;
+}
+
+function fillRectBit(mask, x0, y0, w, h, bit) {
+  const xEnd = Math.min(mask.width, x0 + w);
+  const yEnd = Math.min(mask.height, y0 + h);
+  for (let y = Math.max(0, y0); y < yEnd; y++)
+    for (let x = Math.max(0, x0); x < xEnd; x++)
+      mask.data[mask.width * y + x] |= bit;
+}
+
+function fillEllipseBit(mask, cx, cy, rx, ry, bit) {
+  const rx2 = rx * rx;
+  const ry2 = ry * ry;
+  const minY = Math.max(0, Math.floor(cy - ry));
+  const maxY = Math.min(mask.height - 1, Math.ceil(cy + ry));
+  for (let y = minY; y <= maxY; y++) {
+    const dy = y - cy;
+    const span = Math.sqrt(Math.max(0, rx2 * (1 - (dy * dy) / ry2)));
+    const minX = Math.max(0, Math.floor(cx - span));
+    const maxX = Math.min(mask.width - 1, Math.ceil(cx + span));
+    for (let x = minX; x <= maxX; x++) {
+      const dx = x - cx;
+      if ((dx * dx) / rx2 + (dy * dy) / ry2 <= 1)
+        mask.data[mask.width * y + x] |= bit;
+    }
+  }
+}
+
+function fillEllipseSlabBit(mask, cx, cy, rx, ry, yMin, yMax, bit) {
+  const rx2 = rx * rx;
+  const ry2 = ry * ry;
+  // yMin / yMax can be fractional (slabs are computed from cy ± r/3); floor
+  // them before iterating so the Uint32Array index stays integer — otherwise
+  // typed-array writes are silently dropped on fractional indices.
+  const minY = Math.floor(Math.max(yMin, Math.max(0, Math.floor(cy - ry))));
+  const maxY = Math.floor(Math.min(yMax - 1, Math.min(mask.height - 1, Math.ceil(cy + ry))));
+  for (let y = minY; y <= maxY; y++) {
+    const dy = y - cy;
+    const span = Math.sqrt(Math.max(0, rx2 * (1 - (dy * dy) / ry2)));
+    const minX = Math.max(0, Math.floor(cx - span));
+    const maxX = Math.min(mask.width - 1, Math.ceil(cx + span));
+    for (let x = minX; x <= maxX; x++) {
+      const dx = x - cx;
+      if ((dx * dx) / rx2 + (dy * dy) / ry2 <= 1)
+        mask.data[mask.width * y + x] |= bit;
+    }
+  }
+}
+
+function fillPolygonBit(mask, points, bit) {
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const [, y] of points) {
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  minY = Math.max(0, Math.floor(minY));
+  maxY = Math.min(mask.height - 1, Math.ceil(maxY));
+  for (let y = minY; y <= maxY; y++) {
+    const xs = [];
+    for (let i = 0; i < points.length; i++) {
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[(i + 1) % points.length];
+      if ((y1 > y) !== (y2 > y)) {
+        xs.push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
+      }
+    }
+    xs.sort((a, b) => a - b);
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      const x0 = Math.max(0, Math.ceil(xs[i]));
+      const x1 = Math.min(mask.width - 1, Math.floor(xs[i + 1]));
+      for (let x = x0; x <= x1; x++) mask.data[mask.width * y + x] |= bit;
+    }
+  }
+}
+
+// Smallest "real" overlap region we'll emit. Below this, a multi-bit mask
+// is treated as a vertex-coincidence artifact (two adjacent polygons sharing
+// a vertex pixel because of scanline-rounding) and merged back into the
+// highest set bit's single-bit mask — matching the pre-bitmask "later-drawn
+// shape wins at boundaries" behaviour. Anything larger is a real overlap
+// (fish scales, flower petals, …) and gets its own region id.
+const MIN_OVERLAP_PIXELS = 4;
+
+function popcount(n) {
+  n = n - ((n >>> 1) & 0x55555555);
+  n = (n & 0x33333333) + ((n >>> 2) & 0x33333333);
+  return (((n + (n >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
+}
+
+// Convert the bitmask buffer into the final 8-bit-per-channel labels PNG.
+//
+// Every distinct non-zero bitmask becomes its own region id; pixels with
+// mask==0 stay alpha=0 (caught later by addBackgroundRegion). IDs are
+// assigned in ASCENDING MASK ORDER which means a subject whose shapes never
+// genuinely overlap (e.g. star, where tips touch only at shared vertices)
+// gets ids 1..N matching shape-index+1 — keeping its labels PNG byte-
+// identical to the pre-bitmask generator. Subjects with overlap get fresh
+// ids that no longer line up with hand-written numbers in the source, but
+// since the runtime only cares that each region has a unique id, that's fine.
+function maskToLabelsPng(mask) {
+  // Iteratively cull tiny masks until stable. Each pass: count distinct
+  // masks; for any with count ≤ MIN_OVERLAP_PIXELS, remap multi-bit slivers
+  // (vertex-coincidence overlaps from polygon scanlining) into their
+  // highest single bit — matching the pre-bitmask "later-drawn shape wins"
+  // boundary behaviour — and drop single-bit slivers (boundary noise from
+  // node-canvas path rasterization) to mask=0 so the background pass
+  // absorbs them. We loop because folding a multi-bit mask into a
+  // single-bit target can itself produce a NEW small single-bit region if
+  // that bit had no standalone area before.
+  while (true) {
+    const counts = new Map();
+    for (let i = 0; i < mask.data.length; i++) {
+      const m = mask.data[i];
+      if (m !== 0) counts.set(m, (counts.get(m) || 0) + 1);
+    }
+    const remap = new Map();
+    for (const [m, count] of counts) {
+      if (count <= MIN_OVERLAP_PIXELS) {
+        if (popcount(m) > 1) {
+          remap.set(m, 1 << (31 - Math.clz32(m)));
+        } else {
+          remap.set(m, 0);
+        }
+      }
+    }
+    if (remap.size === 0) break;
+    for (let i = 0; i < mask.data.length; i++) {
+      const m = mask.data[i];
+      if (m !== 0 && remap.has(m)) mask.data[i] = remap.get(m);
+    }
+  }
+  // Now-stable distinct masks → sequential ids in ascending mask-value order.
+  const distinct = new Set();
+  for (let i = 0; i < mask.data.length; i++) {
+    const m = mask.data[i];
+    if (m !== 0) distinct.add(m);
+  }
+  const sorted = [...distinct].sort((a, b) => a - b);
+  const idForMask = new Map();
+  let nextId = 1;
+  for (const m of sorted) {
+    if (nextId === BACKGROUND_ID) nextId++;
+    if (nextId > 254) {
+      throw new Error(
+        `too many distinct regions in one subject — overflowed past id 254`
+      );
+    }
+    idForMask.set(m, nextId);
+    nextId++;
+  }
+  const png = makeImage(mask.width, mask.height);
+  for (let i = 0; i < mask.data.length; i++) {
+    const m = mask.data[i];
+    if (m === 0) continue; // leave alpha=0; background pass picks it up
+    const p = i << 2;
+    png.data[p] = idForMask.get(m);
+    png.data[p + 3] = 255;
+  }
+  return png;
+}
 
 // ---------- pictures ----------
 
 function makeApple() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
   // Geometry (chosen so each region is comfortably tappable on a phone)
@@ -253,12 +394,12 @@ function makeApple() {
   const hlRX = 28;
   const hlRY = 18;
 
-  // Labels: paint regions in dependency order — body first, highlight on top
-  // of body. Stem and leaf are outside the body.
-  fillEllipse(labels, bodyCX, bodyCY, bodyRX, bodyRY, id(1)); // body
-  fillEllipse(labels, hlCX, hlCY, hlRX, hlRY, id(4)); // highlight (overwrites body)
-  fillRect(labels, stemX, stemY, stemW, stemH, id(2)); // stem
-  fillEllipse(labels, leafCX, leafCY, leafRX, leafRY, id(3)); // leaf
+  // Labels: each shape gets its own bit. The highlight sits inside the body,
+  // so the (body | highlight) overlap pixels become their own region.
+  fillEllipseBit(mask, bodyCX, bodyCY, bodyRX, bodyRY, bitFor(0)); // body
+  fillRectBit(mask, stemX, stemY, stemW, stemH, bitFor(1)); // stem
+  fillEllipseBit(mask, leafCX, leafCY, leafRX, leafRY, bitFor(2)); // leaf
+  fillEllipseBit(mask, hlCX, hlCY, hlRX, hlRY, bitFor(3)); // highlight
 
   // Lines: same shape outlines, sharp black on transparent.
   strokeEllipse(lines, bodyCX, bodyCY, bodyRX, bodyRY, BLACK, STROKE);
@@ -266,22 +407,23 @@ function makeApple() {
   strokeRect(lines, stemX, stemY, stemW, stemH, BLACK, STROKE);
   strokeEllipse(lines, leafCX, leafCY, leafRX, leafRY, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeHouse() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
-  // Sky covers the whole canvas; everything else paints on top.
-  fillRect(labels, 0, 0, SIZE, SIZE, id(1)); // sky
+  // Sky covers the whole canvas; walls/roof/door/windows OR additional bits
+  // on top, so the overlap with sky becomes the foreground region for each.
+  fillRectBit(mask, 0, 0, SIZE, SIZE, bitFor(0)); // sky
 
   // Walls: the body of the house.
   const wallX = 100;
   const wallY = 280;
   const wallW = 312;
   const wallH = 180;
-  fillRect(labels, wallX, wallY, wallW, wallH, id(2));
+  fillRectBit(mask, wallX, wallY, wallW, wallH, bitFor(1));
 
   // Roof: triangular cap above walls.
   const roof = [
@@ -289,14 +431,15 @@ function makeHouse() {
     [256, 130],
     [432, 280],
   ];
-  fillPolygon(labels, roof, id(3));
+  fillPolygonBit(mask, roof, bitFor(2));
 
-  // Door + windows overwrite parts of the wall.
+  // Door + windows: own bits — under bitmask semantics they form
+  // (sky | wall | door) etc. overlap regions, distinct from plain wall.
   const doorX = 220;
   const doorY = 360;
   const doorW = 70;
   const doorH = 100;
-  fillRect(labels, doorX, doorY, doorW, doorH, id(4)); // door
+  fillRectBit(mask, doorX, doorY, doorW, doorH, bitFor(3)); // door
 
   const w1X = 140;
   const w1Y = 320;
@@ -304,8 +447,8 @@ function makeHouse() {
   const w2Y = 320;
   const winW = 60;
   const winH = 60;
-  fillRect(labels, w1X, w1Y, winW, winH, id(5)); // window 1
-  fillRect(labels, w2X, w2Y, winW, winH, id(6)); // window 2
+  fillRectBit(mask, w1X, w1Y, winW, winH, bitFor(4)); // window 1
+  fillRectBit(mask, w2X, w2Y, winW, winH, bitFor(5)); // window 2
 
   // Lines: outline every region.
   strokePolygon(lines, roof, BLACK, STROKE);
@@ -314,11 +457,11 @@ function makeHouse() {
   strokeRect(lines, w1X, w1Y, winW, winH, BLACK, STROKE);
   strokeRect(lines, w2X, w2Y, winW, winH, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeStar() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
   const cx = 256;
@@ -337,39 +480,40 @@ function makeStar() {
   // Center pentagon: connect the inner verts.
   const pentagon = [verts[1], verts[3], verts[5], verts[7], verts[9]];
 
-  // Each tip triangle uses [outer, prev_inner, next_inner]. Paint tips first
-  // (regions 1..5), then center pentagon (region 6) — order doesn't matter
-  // since the regions don't overlap.
+  // Each tip triangle uses [outer, prev_inner, next_inner]. Tips and pentagon
+  // are disjoint shapes, so each pixel gets exactly one bit set — and the
+  // mask→id pass assigns ids 1..6 in bit order, byte-identical to the old
+  // hand-numbered output.
   for (let i = 0; i < 5; i++) {
     const outer = verts[i * 2];
     const prevInner = verts[(i * 2 - 1 + 10) % 10];
     const nextInner = verts[(i * 2 + 1) % 10];
-    fillPolygon(labels, [outer, nextInner, prevInner], id(i + 1));
+    fillPolygonBit(mask, [outer, nextInner, prevInner], bitFor(i));
   }
-  fillPolygon(labels, pentagon, id(6));
+  fillPolygonBit(mask, pentagon, bitFor(5));
 
   // Outlines: the star silhouette + the pentagon (which separates tips from center).
   strokePolygon(lines, verts, BLACK, STROKE);
   strokePolygon(lines, pentagon, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeCat() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
   // Body sits low; head perches above; ears cap the head; tail curls out to
   // the right. Eyes + nose overlay the head and need to be small but still
   // ≥30px so a finger pad can hit them on a phone.
   const tail = { cx: 388, cy: 410, rx: 78, ry: 18 };
-  fillEllipse(labels, tail.cx, tail.cy, tail.rx, tail.ry, id(8));
+  fillEllipseBit(mask, tail.cx, tail.cy, tail.rx, tail.ry, bitFor(0));
 
   const body = { cx: 256, cy: 380, rx: 120, ry: 80 };
-  fillEllipse(labels, body.cx, body.cy, body.rx, body.ry, id(1));
+  fillEllipseBit(mask, body.cx, body.cy, body.rx, body.ry, bitFor(1));
 
   const head = { cx: 256, cy: 230, rx: 110, ry: 95 };
-  fillEllipse(labels, head.cx, head.cy, head.rx, head.ry, id(2));
+  fillEllipseBit(mask, head.cx, head.cy, head.rx, head.ry, bitFor(2));
 
   const earL = [
     [180, 145],
@@ -381,20 +525,20 @@ function makeCat() {
     [332, 145],
     [347, 215],
   ];
-  fillPolygon(labels, earL, id(3));
-  fillPolygon(labels, earR, id(4));
+  fillPolygonBit(mask, earL, bitFor(3));
+  fillPolygonBit(mask, earR, bitFor(4));
 
   const eyeL = { cx: 220, cy: 220, rx: 14, ry: 18 };
   const eyeR = { cx: 292, cy: 220, rx: 14, ry: 18 };
-  fillEllipse(labels, eyeL.cx, eyeL.cy, eyeL.rx, eyeL.ry, id(5));
-  fillEllipse(labels, eyeR.cx, eyeR.cy, eyeR.rx, eyeR.ry, id(6));
+  fillEllipseBit(mask, eyeL.cx, eyeL.cy, eyeL.rx, eyeL.ry, bitFor(5));
+  fillEllipseBit(mask, eyeR.cx, eyeR.cy, eyeR.rx, eyeR.ry, bitFor(6));
 
   const nose = [
     [246, 252],
     [266, 252],
     [256, 268],
   ];
-  fillPolygon(labels, nose, id(7));
+  fillPolygonBit(mask, nose, bitFor(7));
 
   // Lines: outline every region. Tail sits behind the body so its outer arc
   // is the only visible part — but stroking the full ellipse looks fine
@@ -408,75 +552,90 @@ function makeCat() {
   strokeEllipse(lines, eyeR.cx, eyeR.cy, eyeR.rx, eyeR.ry, BLACK, STROKE);
   strokePolygon(lines, nose, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeFish() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
   // Body is a horizontal oval; tail fin sits behind on the right; top + bottom
-  // fins above/below body; eye and a "scales" oval inside the body.
+  // fins above/below body; eye on the head end; and a row of overlapping
+  // scale circles along the lower body — each scale is its own bit, so the
+  // crescent overlaps between adjacent scales become their own paintable
+  // sub-regions (the headline overlap-aware feature).
   const tail = [
     [360, 256],
     [450, 180],
     [450, 332],
   ];
-  fillPolygon(labels, tail, id(2));
+  fillPolygonBit(mask, tail, bitFor(0));
 
   const body = { cx: 240, cy: 256, rx: 140, ry: 85 };
-  fillEllipse(labels, body.cx, body.cy, body.rx, body.ry, id(1));
+  fillEllipseBit(mask, body.cx, body.cy, body.rx, body.ry, bitFor(1));
 
   const topFin = [
     [200, 180],
     [260, 100],
     [300, 180],
   ];
-  fillPolygon(labels, topFin, id(3));
+  fillPolygonBit(mask, topFin, bitFor(2));
 
   const botFin = [
     [200, 332],
     [260, 410],
     [300, 332],
   ];
-  fillPolygon(labels, botFin, id(4));
-
-  // Scales: an oval segment inside the body (the "tummy" patch).
-  fillEllipse(labels, 270, 285, 60, 35, id(6));
+  fillPolygonBit(mask, botFin, bitFor(3));
 
   const eye = { cx: 165, cy: 240, rx: 16, ry: 16 };
-  fillEllipse(labels, eye.cx, eye.cy, eye.rx, eye.ry, id(5));
+  fillEllipseBit(mask, eye.cx, eye.cy, eye.rx, eye.ry, bitFor(4));
+
+  // Five overlapping scale circles. r=28, spacing=32 → adjacent overlap is
+  // 24px wide along the centerline — comfortably tappable lens regions.
+  // Each scale gets its own bit (5..9); the body bit is also set under every
+  // scale, so distinct masks are: body+scale_i (5 of them), body+scale_i+
+  // scale_{i+1} (4 lenses), giving 9 paintable sub-regions across the row.
+  const scaleY = 295;
+  const scaleR = 28;
+  const scaleXs = [180, 212, 244, 276, 308];
+  scaleXs.forEach((sx, i) => {
+    fillEllipseBit(mask, sx, scaleY, scaleR, scaleR, bitFor(5 + i));
+  });
 
   // Lines
   strokePolygon(lines, tail, BLACK, STROKE);
   strokeEllipse(lines, body.cx, body.cy, body.rx, body.ry, BLACK, STROKE);
   strokePolygon(lines, topFin, BLACK, STROKE);
   strokePolygon(lines, botFin, BLACK, STROKE);
-  strokeEllipse(lines, 270, 285, 60, 35, BLACK, STROKE);
   strokeEllipse(lines, eye.cx, eye.cy, eye.rx, eye.ry, BLACK, STROKE);
+  scaleXs.forEach((sx) => {
+    strokeEllipse(lines, sx, scaleY, scaleR, scaleR, BLACK, STROKE);
+  });
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeBalloon() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
-  // Sky covers everything; balloon + basket overlay it. Balloon is a single
-  // circle split into 3 horizontal stripes via fillEllipseSlab.
-  fillRect(labels, 0, 0, SIZE, SIZE, id(1));
+  // Sky covers everything; balloon + basket OR additional bits on top.
+  // The three balloon stripes use disjoint y-slabs so they don't overlap each
+  // other (only the sky bit shares with them).
+  fillRectBit(mask, 0, 0, SIZE, SIZE, bitFor(0));
 
   const balloon = { cx: 256, cy: 200, r: 130 };
   const yTop = balloon.cy - balloon.r;       // 70
   const yMid1 = balloon.cy - balloon.r / 3;  // ~157
   const yMid2 = balloon.cy + balloon.r / 3;  // ~243
   const yBot = balloon.cy + balloon.r;       // 330
-  fillEllipseSlab(labels, balloon.cx, balloon.cy, balloon.r, balloon.r, yTop, yMid1, id(2));
-  fillEllipseSlab(labels, balloon.cx, balloon.cy, balloon.r, balloon.r, yMid1, yMid2, id(3));
-  fillEllipseSlab(labels, balloon.cx, balloon.cy, balloon.r, balloon.r, yMid2, yBot + 1, id(4));
+  fillEllipseSlabBit(mask, balloon.cx, balloon.cy, balloon.r, balloon.r, yTop, yMid1, bitFor(1));
+  fillEllipseSlabBit(mask, balloon.cx, balloon.cy, balloon.r, balloon.r, yMid1, yMid2, bitFor(2));
+  fillEllipseSlabBit(mask, balloon.cx, balloon.cy, balloon.r, balloon.r, yMid2, yBot + 1, bitFor(3));
 
   const basket = { x: 226, y: 380, w: 60, h: 50 };
-  fillRect(labels, basket.x, basket.y, basket.w, basket.h, id(5));
+  fillRectBit(mask, basket.x, basket.y, basket.w, basket.h, bitFor(4));
 
   // Lines: balloon silhouette + 2 stripe-divider chords + basket + ropes.
   strokeEllipse(lines, balloon.cx, balloon.cy, balloon.r, balloon.r, BLACK, STROKE);
@@ -487,11 +646,11 @@ function makeBalloon() {
   drawLine(lines, balloon.cx - 60, yBot - 8, basket.x + 6, basket.y, BLACK, STROKE);
   drawLine(lines, balloon.cx + 60, yBot - 8, basket.x + basket.w - 6, basket.y, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeCupcake() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
   // Wrapper trapezoid (wider at top, narrows toward bottom).
@@ -501,16 +660,16 @@ function makeCupcake() {
     [340, 460],
     [172, 460],
   ];
-  fillPolygon(labels, wrapper, id(4));
+  fillPolygonBit(mask, wrapper, bitFor(0));
 
-  // Three swirled frosting layers, painted bottom-up so each tier covers a
-  // bit of the one below it.
-  fillEllipse(labels, 256, 275, 130, 55, id(1));
-  fillEllipse(labels, 256, 220, 100, 45, id(2));
-  fillEllipse(labels, 256, 170, 70, 35, id(3));
+  // Three swirled frosting layers; each adjacent pair overlaps slightly so
+  // overlap-aware regions add a thin "edge" sub-region between tiers.
+  fillEllipseBit(mask, 256, 275, 130, 55, bitFor(1));
+  fillEllipseBit(mask, 256, 220, 100, 45, bitFor(2));
+  fillEllipseBit(mask, 256, 170, 70, 35, bitFor(3));
 
   // Cherry on top.
-  fillEllipse(labels, 256, 125, 22, 22, id(5));
+  fillEllipseBit(mask, 256, 125, 22, 22, bitFor(4));
 
   // Lines
   strokePolygon(lines, wrapper, BLACK, STROKE);
@@ -519,33 +678,34 @@ function makeCupcake() {
   strokeEllipse(lines, 256, 170, 70, 35, BLACK, STROKE);
   strokeEllipse(lines, 256, 125, 22, 22, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeRobot() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
   // Body first, then arms attach to its sides, then head sits above, then
-  // facial features overlay the head.
+  // facial features OR additional bits onto the head — eye pixels carry both
+  // the head bit and their own bit, distinguishing them as separate regions.
   const body = { x: 184, y: 280, w: 144, h: 160 };
-  fillRect(labels, body.x, body.y, body.w, body.h, id(1));
+  fillRectBit(mask, body.x, body.y, body.w, body.h, bitFor(0));
 
   const armL = { x: 130, y: 290, w: 50, h: 110 };
   const armR = { x: 332, y: 290, w: 50, h: 110 };
-  fillRect(labels, armL.x, armL.y, armL.w, armL.h, id(2));
-  fillRect(labels, armR.x, armR.y, armR.w, armR.h, id(3));
+  fillRectBit(mask, armL.x, armL.y, armL.w, armL.h, bitFor(1));
+  fillRectBit(mask, armR.x, armR.y, armR.w, armR.h, bitFor(2));
 
   const head = { x: 200, y: 130, w: 112, h: 130 };
-  fillRect(labels, head.x, head.y, head.w, head.h, id(4));
+  fillRectBit(mask, head.x, head.y, head.w, head.h, bitFor(3));
 
   const eyeL = { cx: 228, cy: 175, r: 14 };
   const eyeR = { cx: 284, cy: 175, r: 14 };
-  fillEllipse(labels, eyeL.cx, eyeL.cy, eyeL.r, eyeL.r, id(5));
-  fillEllipse(labels, eyeR.cx, eyeR.cy, eyeR.r, eyeR.r, id(6));
+  fillEllipseBit(mask, eyeL.cx, eyeL.cy, eyeL.r, eyeL.r, bitFor(4));
+  fillEllipseBit(mask, eyeR.cx, eyeR.cy, eyeR.r, eyeR.r, bitFor(5));
 
   const antenna = { cx: 256, cy: 90, r: 16 };
-  fillEllipse(labels, antenna.cx, antenna.cy, antenna.r, antenna.r, id(7));
+  fillEllipseBit(mask, antenna.cx, antenna.cy, antenna.r, antenna.r, bitFor(6));
 
   // Lines
   strokeRect(lines, body.x, body.y, body.w, body.h, BLACK, STROKE);
@@ -560,17 +720,18 @@ function makeRobot() {
   // Mouth bar — outline only, gives a face.
   drawLine(lines, head.x + 28, head.y + 95, head.x + head.w - 28, head.y + 95, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeSailboat() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
-  // Sky → water → hull → sails → sun. Sails painted last so the mast line
-  // (drawn only on the lines image) cuts cleanly between them.
-  fillRect(labels, 0, 0, SIZE, SIZE, id(1)); // sky
-  fillRect(labels, 0, 380, SIZE, SIZE - 380, id(2)); // water
+  // Sky → water → hull → sails → sun. Sky and water are full-canvas tiles
+  // that don't overlap each other (water is below y=380). Other shapes OR
+  // additional bits on top of sky/water as appropriate.
+  fillRectBit(mask, 0, 0, SIZE, SIZE, bitFor(0)); // sky covers all
+  fillRectBit(mask, 0, 380, SIZE, SIZE - 380, bitFor(1)); // water (overrides sky bit by adding water bit)
 
   const hull = [
     [165, 360],
@@ -578,7 +739,7 @@ function makeSailboat() {
     [310, 412],
     [202, 412],
   ];
-  fillPolygon(labels, hull, id(3));
+  fillPolygonBit(mask, hull, bitFor(2));
 
   // Mast at x=256 splits the two sails (no region on the mast itself; just an
   // outline line). Sails are wedge triangles flanking the mast.
@@ -592,11 +753,11 @@ function makeSailboat() {
     [170, 360],
     [252, 360],
   ];
-  fillPolygon(labels, sailBack, id(4));
-  fillPolygon(labels, sailFront, id(5));
+  fillPolygonBit(mask, sailBack, bitFor(3));
+  fillPolygonBit(mask, sailFront, bitFor(4));
 
   const sun = { cx: 420, cy: 110, r: 42 };
-  fillEllipse(labels, sun.cx, sun.cy, sun.r, sun.r, id(6));
+  fillEllipseBit(mask, sun.cx, sun.cy, sun.r, sun.r, bitFor(5));
 
   // Lines
   drawLine(lines, 0, 380, SIZE - 1, 380, BLACK, STROKE); // waterline
@@ -606,40 +767,46 @@ function makeSailboat() {
   drawLine(lines, 256, 195, 256, 360, BLACK, STROKE); // mast
   strokeEllipse(lines, sun.cx, sun.cy, sun.r, sun.r, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 function makeFlower() {
-  const labels = makeImage(SIZE, SIZE);
+  const mask = makeMask(SIZE, SIZE);
   const lines = makeImage(SIZE, SIZE);
 
-  // 5 petals around a center, plus stem and leaf below.
+  // Five petals around a center, plus stem and leaf below. Petal centers
+  // sit at radius R from the flower center; petal circles have radius
+  // petalR. Adjacent petal centers are 2*R*sin(36°) ≈ 82px apart, so with
+  // petalR=55 each pair overlaps by ~28px — substantial lens regions.
+  // The center disk overlaps every petal's inner edge for another set of
+  // sub-regions. Under the bitmask scheme each of these overlaps is its
+  // own paintable region, so the flower ends up with ~17 colorable cells.
   const cx = 256;
   const cy = 220;
-  const R = 80;
-  const petalR = 50;
+  const R = 70;
+  const petalR = 55;
   const centerR = 38;
 
   const stem = { x: 248, y: 295, w: 16, h: 165 };
-  fillRect(labels, stem.x, stem.y, stem.w, stem.h, id(1));
+  fillRectBit(mask, stem.x, stem.y, stem.w, stem.h, bitFor(0));
 
   const leaf = { cx: 320, cy: 365, rx: 50, ry: 22 };
-  fillEllipse(labels, leaf.cx, leaf.cy, leaf.rx, leaf.ry, id(2));
+  fillEllipseBit(mask, leaf.cx, leaf.cy, leaf.rx, leaf.ry, bitFor(1));
 
-  // 5 evenly spaced petals at angles 90°, 162°, 234°, 306°, 18°. Petal
-  // circles overlap each other near the center; the center disk on top
-  // overwrites the overlap zone so each petal owns the "outer half" of its
-  // own circle.
+  // 5 evenly spaced petals at angles 90°, 162°, 234°, 306°, 18°. Each gets
+  // its own bit; pairs of adjacent petals share ~28px-wide lens overlaps;
+  // the center disk has its own bit so center∩petal pixels become per-petal
+  // sub-regions.
   const petalAngles = [90, 162, 234, 306, 18];
   const petalPositions = petalAngles.map((deg) => {
     const r = (deg * Math.PI) / 180;
     return [cx + R * Math.cos(r), cy - R * Math.sin(r)];
   });
   petalPositions.forEach(([px, py], i) => {
-    fillEllipse(labels, px, py, petalR, petalR, id(3 + i));
+    fillEllipseBit(mask, px, py, petalR, petalR, bitFor(2 + i));
   });
 
-  fillEllipse(labels, cx, cy, centerR, centerR, id(8));
+  fillEllipseBit(mask, cx, cy, centerR, centerR, bitFor(7));
 
   // Lines
   strokeRect(lines, stem.x, stem.y, stem.w, stem.h, BLACK, STROKE);
@@ -649,27 +816,17 @@ function makeFlower() {
   });
   strokeEllipse(lines, cx, cy, centerR, centerR, BLACK, STROKE);
 
-  return { labels, lines };
+  return { labels: maskToLabelsPng(mask), lines };
 }
 
 // ---------- node-canvas helpers (wolf / mermaid / unicorn) ----------
 //
 // The original 10 pictures are simple-enough to express as pngjs primitives.
 // The three showcase subjects (wolf, mermaid, unicorn) need real curves, so
-// we draw them with node-canvas and then wrap each canvas back into a pngjs
-// PNG so the rest of the pipeline (background pass, file write) is uniform.
-//
-// Two canvases per picture: a `labels` canvas with antialias='none' so the
-// label-map stays a flat-color id buffer (every pixel snaps to one region),
-// and a `lines` canvas with normal AA so the visible outlines look smooth.
-
-function newLabelsCanvas() {
-  const cv = createCanvas(SIZE, SIZE);
-  const ctx = cv.getContext("2d");
-  ctx.antialias = "none"; // crisp edges — every label pixel must be flat color
-  ctx.imageSmoothingEnabled = false;
-  return { cv, ctx };
-}
+// we draw their lines with node-canvas (AA on, beautiful curves). The label
+// map is built by rasterizing each path's *fill* onto a scratch canvas and
+// ORing its bit into the shared bitmask buffer — same overlap-aware semantics
+// as the pngjs pictures.
 
 function newLinesCanvas() {
   const cv = createCanvas(SIZE, SIZE);
@@ -677,6 +834,17 @@ function newLinesCanvas() {
   ctx.antialias = "default";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  return { cv, ctx };
+}
+
+// Scratch canvas — paths get filled onto this one shape at a time so we can
+// read back which pixels were covered. Antialiasing OFF so the alpha mask is
+// a hard 0/255 boundary; otherwise edge pixels would land in two shapes.
+function newScratchCanvas() {
+  const cv = createCanvas(SIZE, SIZE);
+  const ctx = cv.getContext("2d");
+  ctx.antialias = "none";
+  ctx.imageSmoothingEnabled = false;
   return { cv, ctx };
 }
 
@@ -690,15 +858,19 @@ function canvasToPng(cv) {
   return png;
 }
 
-// Paint one region: fill the path with the region's id-color in the labels
-// canvas AND stroke its outline in the lines canvas. The `path` callback
-// runs against whichever ctx we're using — don't allocate Path2D, just
-// re-issue the same path commands twice.
-function paintRegion(labelsCtx, linesCtx, regionId, path) {
-  labelsCtx.fillStyle = `rgb(${regionId},0,0)`;
-  labelsCtx.beginPath();
-  path(labelsCtx);
-  labelsCtx.fill();
+// Paint one shape: rasterize its fill onto the scratch canvas, OR the bit
+// into the mask wherever alpha > 0, then stroke its outline onto the lines
+// canvas. The `path` callback runs against whichever ctx we're using.
+function paintShape(scratchCtx, mask, bit, linesCtx, path) {
+  scratchCtx.clearRect(0, 0, SIZE, SIZE);
+  scratchCtx.fillStyle = "#fff";
+  scratchCtx.beginPath();
+  path(scratchCtx);
+  scratchCtx.fill();
+  const px = scratchCtx.getImageData(0, 0, SIZE, SIZE).data;
+  for (let i = 0, j = 0; i < px.length; i += 4, j++) {
+    if (px[i + 3] > 0) mask.data[j] |= bit;
+  }
 
   linesCtx.strokeStyle = "#000";
   linesCtx.lineWidth = STROKE;
@@ -753,7 +925,8 @@ function addBackgroundRegion(labels, lines) {
 // stay perfectly registered.
 
 function makeWolf() {
-  const { cv: labelsCv, ctx: labelsCtx } = newLabelsCanvas();
+  const mask = makeMask(SIZE, SIZE);
+  const { ctx: scratchCtx } = newScratchCanvas();
   const { cv: linesCv, ctx: linesCtx } = newLinesCanvas();
 
   // --- paths ---
@@ -882,20 +1055,27 @@ function makeWolf() {
     c.closePath();
   };
 
-  // --- paint in dependency order: back → front. ids stay independent. ---
+  // --- paint in dependency order: back → front. Each shape's bit is ORed
+  // into the mask; overlap zones (snout∩head, eye∩head, chest∩neckFur, …)
+  // become their own paintable sub-regions automatically. ---
 
-  paintRegion(labelsCtx, linesCtx, 11, neckFur);
-  paintRegion(labelsCtx, linesCtx, 1, head);
-  paintRegion(labelsCtx, linesCtx, 2, earL);
-  paintRegion(labelsCtx, linesCtx, 3, earR);
-  paintRegion(labelsCtx, linesCtx, 4, earInL);
-  paintRegion(labelsCtx, linesCtx, 5, earInR);
-  paintRegion(labelsCtx, linesCtx, 6, snout);
-  paintRegion(labelsCtx, linesCtx, 7, nose);
-  paintRegion(labelsCtx, linesCtx, 8, eyeL);
-  paintRegion(labelsCtx, linesCtx, 9, eyeR);
-  paintRegion(labelsCtx, linesCtx, 10, mouth);
-  paintRegion(labelsCtx, linesCtx, 12, chest);
+  const shapes = [
+    neckFur,
+    head,
+    earL,
+    earR,
+    earInL,
+    earInR,
+    snout,
+    nose,
+    eyeL,
+    eyeR,
+    mouth,
+    chest,
+  ];
+  shapes.forEach((shape, i) => {
+    paintShape(scratchCtx, mask, bitFor(i), linesCtx, shape);
+  });
 
   // Brow furrows above each eye for an "intense" expression.
   strokeDetail(linesCtx, (c) => {
@@ -919,7 +1099,7 @@ function makeWolf() {
     c.moveTo(302, 388); c.lineTo(350, 398);
   }, 2);
 
-  return { labels: canvasToPng(labelsCv), lines: canvasToPng(linesCv) };
+  return { labels: maskToLabelsPng(mask), lines: canvasToPng(linesCv) };
 }
 
 // ---------- mermaid ----------
@@ -929,7 +1109,8 @@ function makeWolf() {
 // two hands, tail upper, tail lower, two flukes, four bubbles.
 
 function makeMermaid() {
-  const { cv: labelsCv, ctx: labelsCtx } = newLabelsCanvas();
+  const mask = makeMask(SIZE, SIZE);
+  const { ctx: scratchCtx } = newScratchCanvas();
   const { cv: linesCv, ctx: linesCtx } = newLinesCanvas();
 
   // Hair: large silhouette behind everything. Falls past the shoulders and
@@ -1071,28 +1252,34 @@ function makeMermaid() {
     c.closePath();
   };
 
-  // --- paint order (back to front) ---
+  // --- paint order (back to front). Bubbles each get their own bit so the
+  // player can pick a different colour for every one (≥18px radius keeps
+  // them tappable on phones). Overlap zones (face∩hair, bra∩torso, …)
+  // become their own paintable sub-regions. ---
 
-  paintRegion(labelsCtx, linesCtx, 1, hair); // hair behind everything
-  paintRegion(labelsCtx, linesCtx, 7, armL); // arms partly behind torso
-  paintRegion(labelsCtx, linesCtx, 8, armR);
-  paintRegion(labelsCtx, linesCtx, 11, tailUpper);
-  paintRegion(labelsCtx, linesCtx, 12, tailLower);
-  paintRegion(labelsCtx, linesCtx, 13, flukeL);
-  paintRegion(labelsCtx, linesCtx, 14, flukeR);
-  paintRegion(labelsCtx, linesCtx, 6, torso);
-  paintRegion(labelsCtx, linesCtx, 4, braL);
-  paintRegion(labelsCtx, linesCtx, 5, braR);
-  paintRegion(labelsCtx, linesCtx, 3, neck);
-  paintRegion(labelsCtx, linesCtx, 2, face);
-  paintRegion(labelsCtx, linesCtx, 9, handL);
-  paintRegion(labelsCtx, linesCtx, 10, handR);
-  // Bubbles each get their own id so the player can pick a different colour
-  // for every one. Sized ≥18px radius so finger pads can hit them on phones.
-  paintRegion(labelsCtx, linesCtx, 15, bubble(70, 90, 24));
-  paintRegion(labelsCtx, linesCtx, 16, bubble(442, 124, 20));
-  paintRegion(labelsCtx, linesCtx, 17, bubble(88, 358, 18));
-  paintRegion(labelsCtx, linesCtx, 18, bubble(454, 396, 22));
+  const shapes = [
+    hair,        // bit 0 — behind everything
+    armL,        // bit 1
+    armR,        // bit 2
+    tailUpper,   // bit 3
+    tailLower,   // bit 4
+    flukeL,      // bit 5
+    flukeR,      // bit 6
+    torso,       // bit 7
+    braL,        // bit 8
+    braR,        // bit 9
+    neck,        // bit 10
+    face,        // bit 11
+    handL,       // bit 12
+    handR,       // bit 13
+    bubble(70, 90, 24),    // bit 14
+    bubble(442, 124, 20),  // bit 15
+    bubble(88, 358, 18),   // bit 16
+    bubble(454, 396, 22),  // bit 17
+  ];
+  shapes.forEach((shape, i) => {
+    paintShape(scratchCtx, mask, bitFor(i), linesCtx, shape);
+  });
 
   // Face details — eyes, mouth, eyebrows. Stroke-only.
   strokeDetail(linesCtx, (c) => {
@@ -1115,7 +1302,7 @@ function makeMermaid() {
     c.bezierCurveTo(232, 388, 282, 388, 316, 372);
   }, 2);
 
-  return { labels: canvasToPng(labelsCv), lines: canvasToPng(linesCv) };
+  return { labels: maskToLabelsPng(mask), lines: canvasToPng(linesCv) };
 }
 
 // ---------- unicorn ----------
@@ -1124,7 +1311,8 @@ function makeMermaid() {
 // a spiral horn, and a small star sparkle. ~14 regions.
 
 function makeUnicorn() {
-  const { cv: labelsCv, ctx: labelsCtx } = newLabelsCanvas();
+  const mask = makeMask(SIZE, SIZE);
+  const { ctx: scratchCtx } = newScratchCanvas();
   const { cv: linesCv, ctx: linesCtx } = newLinesCanvas();
 
   // Head profile facing left: nose tip at far-left, forehead at top, jaw
@@ -1302,29 +1490,33 @@ function makeUnicorn() {
     c.closePath();
   };
 
-  // --- paint order: mane back layers and ear behind head, head over them,
-  // then snout, then features, neck/chest below. ---
+  // --- paint in the same back-to-front order as before: body silhouette
+  // (neck/chest/head/ear) first, then mane locks layered on top, forelock
+  // over the brow, face features, then the star. The lines canvas
+  // composes them visually; the mask records each shape's bit so overlap
+  // zones (face∩head, mane∩neck, …) become their own sub-regions. ---
 
-  // Paint order: body (neck/chest/head/ear) first so the silhouette is
-  // established, then mane locks on top (their inner edges trace the body
-  // boundary so they don't spill INTO the silhouette), forelock last over
-  // the brow, then face features and the star.
-  paintRegion(labelsCtx, linesCtx, 8, neck);
-  paintRegion(labelsCtx, linesCtx, 9, chest);
-  paintRegion(labelsCtx, linesCtx, 6, ear);
-  paintRegion(labelsCtx, linesCtx, 1, head);
-  paintRegion(labelsCtx, linesCtx, 10, maneLong);
-  paintRegion(labelsCtx, linesCtx, 13, maneTip1);
-  paintRegion(labelsCtx, linesCtx, 11, maneMid);
-  paintRegion(labelsCtx, linesCtx, 14, maneTip2);
-  paintRegion(labelsCtx, linesCtx, 16, maneTop); // numbered after tips so paint order works
-  paintRegion(labelsCtx, linesCtx, 7, horn);
-  paintRegion(labelsCtx, linesCtx, 12, maneFore);
-  paintRegion(labelsCtx, linesCtx, 2, snout);
-  paintRegion(labelsCtx, linesCtx, 3, nostril);
-  paintRegion(labelsCtx, linesCtx, 4, mouth);
-  paintRegion(labelsCtx, linesCtx, 5, eye);
-  paintRegion(labelsCtx, linesCtx, 15, star);
+  const shapes = [
+    neck,      // bit 0
+    chest,     // bit 1
+    ear,       // bit 2
+    head,      // bit 3
+    maneLong,  // bit 4
+    maneTip1,  // bit 5
+    maneMid,   // bit 6
+    maneTip2,  // bit 7
+    maneTop,   // bit 8
+    horn,      // bit 9
+    maneFore,  // bit 10
+    snout,     // bit 11
+    nostril,   // bit 12
+    mouth,     // bit 13
+    eye,       // bit 14
+    star,      // bit 15
+  ];
+  shapes.forEach((shape, i) => {
+    paintShape(scratchCtx, mask, bitFor(i), linesCtx, shape);
+  });
 
   // Spiral grooves on the horn — line-only.
   strokeDetail(linesCtx, (c) => {
@@ -1336,7 +1528,7 @@ function makeUnicorn() {
     c.bezierCurveTo(220, 52, 228, 42, 234, 34);
   }, 2);
 
-  return { labels: canvasToPng(labelsCv), lines: canvasToPng(linesCv) };
+  return { labels: maskToLabelsPng(mask), lines: canvasToPng(linesCv) };
 }
 
 // ---------- write ----------
