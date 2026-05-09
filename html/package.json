@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "gen-sample-assets": "node scripts/gen-sample-assets.mjs"
+    "gen-sample-assets": "node scripts/gen-sample-assets.mjs",
+    "gen-coloring-assets": "node scripts/generate-coloring-assets.mjs"
   },
   "dependencies": {
     "phaser": "^3.90.0"
