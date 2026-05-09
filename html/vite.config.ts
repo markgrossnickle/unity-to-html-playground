@@ -4,9 +4,14 @@ import { resolve } from "node:path";
 // Multi-page app: each example is its own Vite entry under examples/<name>/.
 // To add a new example, drop a folder there with index.html and add it to the
 // `input` map below + a card on the landing page.
+// `base` matches the GitHub Pages subpath (https://<user>.github.io/<repo>/).
+// Override with `VITE_BASE=/` for local dev or root-domain hosting.
+const base = process.env.VITE_BASE ?? "/unity-to-html-playground/";
+
 export default defineConfig({
   root: ".",
   publicDir: "public",
+  base,
   build: {
     outDir: "dist",
     emptyOutDir: true,
