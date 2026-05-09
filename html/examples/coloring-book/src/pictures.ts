@@ -266,3 +266,26 @@ export function removeImportedPicture(id: string): void {
   }
   events.emit("pictures:update", undefined);
 }
+
+export function clearImportedPictures(): number {
+  const removed = imported.length;
+  if (removed === 0) return 0;
+  const previous = imported;
+  imported = [];
+  try {
+    persist();
+  } catch (err) {
+    imported = previous;
+    throw err;
+  }
+  events.emit("pictures:update", undefined);
+  return removed;
+}
+
+export function getImportedCount(): number {
+  return imported.length;
+}
+
+export function getImportedSlugs(): string[] {
+  return imported.map((p) => p.id);
+}

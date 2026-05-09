@@ -1,6 +1,9 @@
 import { events } from "./events";
 import {
+  clearImportedPictures,
   getAllPictures,
+  getImportedCount,
+  getImportedSlugs,
   removeImportedPicture,
   StorageQuotaError,
   type Picture,
@@ -12,10 +15,52 @@ export function initPicker(): void {
   const grid = document.getElementById("picker-grid")!;
   const openBtn = document.getElementById("btn-pictures")!;
   const closeBtn = document.getElementById("picker-close")!;
+  const header = modal.querySelector(".picker-card header") as HTMLElement | null;
 
   function rebuild(): void {
     grid.replaceChildren(...getAllPictures().map((p) => makeCell(p, close)));
     refreshHighlight();
+    refreshClearAllButton();
+  }
+
+  function refreshClearAllButton(): void {
+    if (!header) return;
+    const existing = header.querySelector(".picker-clear-all");
+    const count = getImportedCount();
+    if (count === 0) {
+      existing?.remove();
+      return;
+    }
+    if (existing) {
+      existing.textContent = `Clear all imports (${count})`;
+      return;
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "picker-clear-all";
+    btn.textContent = `Clear all imports (${count})`;
+    btn.addEventListener("click", () => {
+      const n = getImportedCount();
+      if (n === 0) return;
+      if (!window.confirm(`Remove all ${n} imported picture${n === 1 ? "" : "s"}?`)) {
+        return;
+      }
+      // Snapshot slugs before clearing so we can emit per-picture cleanup
+      // events; the scene listens to picture:removed to drop Phaser textures
+      // and fall back if the current picture is one of the removed ones.
+      const slugs = getImportedSlugs();
+      try {
+        clearImportedPictures();
+      } catch {
+        window.alert("Could not clear imports.");
+        return;
+      }
+      for (const slug of slugs) events.emit("picture:removed", slug);
+    });
+    // Insert before the close × so the layout stays balanced.
+    const closeEl = header.querySelector(".picker-close");
+    if (closeEl) header.insertBefore(btn, closeEl);
+    else header.appendChild(btn);
   }
 
   function refreshHighlight(): void {

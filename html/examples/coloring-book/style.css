@@ -270,6 +270,23 @@ body {
   border-color: var(--accent);
 }
 
+.picker-clear-all {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-right: 8px;
+}
+
+.picker-clear-all:hover {
+  color: #c0392b;
+  border-color: #c0392b;
+}
+
 .picker-grid {
   display: grid;
   /* Desktop: a flexible auto-fill grid sized to give each thumbnail ≥150 px
