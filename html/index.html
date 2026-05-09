@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Unity → HTML Playground</title>
+    <link rel="stylesheet" href="/src/landing/landing.css" />
+  </head>
+  <body>
+    <header class="hdr">
+      <h1>Unity → HTML Playground</h1>
+      <p class="sub">
+        Phaser-based experiments. Each card is a standalone example.
+      </p>
+    </header>
+    <main class="grid">
+      <a class="card" href="/examples/animation-playback/index.html">
+        <div class="card-tag">Live</div>
+        <h2>Animation Playback</h2>
+        <p>
+          Plays a multi-layer 2D rig exported from Unity. Transform tracks +
+          sprite-frame swaps, evaluated against authored keyframes.
+        </p>
+      </a>
+      <div class="card card-coming" aria-disabled="true">
+        <div class="card-tag">Coming soon</div>
+        <h2>Coloring Book</h2>
+        <p>
+          Tap-to-fill regions in line-art pictures. Pick a color, tap a region,
+          watch it fill. See <code>html/PLAN.md</code>.
+        </p>
+      </div>
+    </main>
+    <footer class="ftr">
+      <code>html/</code> — Vite + TypeScript + Phaser 3
+    </footer>
+    <script type="module" src="/src/landing/main.ts"></script>
+  </body>
+</html>
