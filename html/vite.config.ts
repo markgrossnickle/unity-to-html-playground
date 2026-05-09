@@ -17,6 +17,10 @@ export default defineConfig({
           __dirname,
           "examples/animation-playback/index.html"
         ),
+        coloringBook: resolve(
+          __dirname,
+          "examples/coloring-book/index.html"
+        ),
       },
     },
   },
