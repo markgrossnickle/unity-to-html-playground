@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "gen-sample-assets": "node scripts/gen-sample-assets.mjs",
-    "gen-coloring-assets": "node scripts/generate-coloring-assets.mjs"
+    "gen-coloring-assets": "node scripts/generate-coloring-assets.mjs",
+    "parse-line-art": "node scripts/parse-line-art.mjs",
+    "gen-autoparsed-assets": "node scripts/generate-autoparsed-batch.mjs"
   },
   "dependencies": {
     "phaser": "^3.90.0"
@@ -17,6 +19,7 @@
     "@types/node": "^25.6.2",
     "canvas": "^3.2.3",
     "pngjs": "^7.0.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.5.0",
     "vite": "^5.4.0"
   }
