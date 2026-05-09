@@ -270,7 +270,10 @@ body {
 
 .picker-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Desktop: a flexible auto-fill grid sized to give each thumbnail ≥150 px
+     so 10 pictures lay out as 4 columns × 3 rows on the default 720 px card
+     (last row has 2 orphans instead of 1 — nicer than a single trailing cell). */
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 16px;
 }
 
@@ -324,6 +327,17 @@ body {
     padding-left: 80px;
   }
 
+  /* Hide the centered title on phones so the 4 toolbar buttons (Pictures /
+     Undo / Clear / Save) can claim the row without overflowing. */
+  .title {
+    display: none;
+  }
+
+  .topbtn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
   .game {
     right: 0;
     bottom: var(--dock-h);
@@ -357,7 +371,10 @@ body {
   }
 
   .picker-grid {
-    grid-template-columns: repeat(3, 1fr);
+    /* Phone: 2 columns. At 375 px viewport this gives ~140 px cells, which
+       is comfortably tappable with a finger pad. Vertical scroll inside the
+       picker-card handles the longer 5-row list. */
+    grid-template-columns: repeat(2, 1fr);
     gap: 10px;
   }
 }
