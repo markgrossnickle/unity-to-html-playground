@@ -119,13 +119,6 @@ export class ColoringScene extends Phaser.Scene {
     this.fillRenderer = new FillRenderer(this.labelMap.width, this.labelMap.height);
     this.textures.addCanvas(FILL_TEXTURE_KEY, this.fillRenderer.canvas);
 
-    // Use nearest-neighbor filtering on every layer. The labels texture isn't
-    // displayed (we sample it offscreen) but linear filtering on the lines
-    // and fill textures softens scaled-up edges into a pixelated mush on
-    // imported / smaller-source pictures. NEAREST keeps each pixel crisp.
-    this.textures.get(`${picture.slug}-lines`).setFilter(Phaser.Textures.FilterMode.NEAREST);
-    this.textures.get(FILL_TEXTURE_KEY).setFilter(Phaser.Textures.FilterMode.NEAREST);
-
     this.fillImage = this.add.image(0, 0, FILL_TEXTURE_KEY).setOrigin(0, 0);
     this.linesImage = this.add
       .image(0, 0, `${picture.slug}-lines`)

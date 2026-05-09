@@ -9,9 +9,13 @@
 //     a typed-array stack is bounded and ~as fast as the union-find pass.
 //   - Optionally downscales large source images to keep parsing under ~3s on
 //     mobile (Android Chrome on a mid-range phone is the target).
+//   - The visible LINES layer is drawn from the original source image's luma
+//     (black with alpha = 1 − lightness), so antialiased outlines stay smooth
+//     and the user's drawing isn't aliased into pixelated mush. Threshold +
+//     erode are still used for the LABELS layer where we need a binary mask.
 //
 // Output is a pair of canvases that match the runtime's expected format:
-//   lines:  RGBA, black where outline, transparent elsewhere.
+//   lines:  RGBA, black with luma-derived alpha (preserves antialiasing).
 //   labels: RGBA, R=region id (1..255), alpha=255 inside a region, 0 outside.
 
 const BACKGROUND_ID = 255;
@@ -70,16 +74,11 @@ export async function parseImage(
   const backgroundRaw = pickBackground(sizes, survivingBorder);
   const idMap = assignFinalIds(sizes, backgroundRaw);
 
-  // Anything dropped or demoted gets folded back into the outline so the
-  // visible lines layer covers it — same trick the Node parser uses.
-  const linesMask = new Uint8Array(mask);
-  for (let i = 0; i < labels.length; i++) {
-    const raw = labels[i]!;
-    if (raw === 0) continue;
-    if (!idMap.get(raw)) linesMask[i] = 1;
-  }
-
-  const linesPng = buildLinesPng(linesMask, width, height);
+  // Lines layer is drawn straight from source luma — keep the outline's
+  // antialiasing so it doesn't look pixelated when scaled up. The runtime
+  // composites this on top of the fill canvas, so the original outline
+  // appearance is preserved exactly.
+  const linesPng = buildLinesPng(gray, width, height);
   const labelsPng = buildLabelsPng(labels, idMap, width, height);
 
   const regionCount = idMap.size - (backgroundRaw !== null ? 1 : 0);
@@ -302,7 +301,12 @@ function assignFinalIds(
   return idMap;
 }
 
-function buildLinesPng(mask: Uint8Array, width: number, height: number): string {
+// Build the visible outline layer directly from the source's luma channel.
+// Each pixel becomes pure black with alpha = 255 - luma, so a fully-black
+// source pixel stays fully opaque, fully-white becomes transparent, and gray
+// edge pixels become semi-transparent black — preserving antialiasing exactly
+// the way the source artist drew it. We don't binarize for the visible layer.
+function buildLinesPng(gray: Uint8Array, width: number, height: number): string {
   const c = document.createElement("canvas");
   c.width = width;
   c.height = height;
@@ -310,11 +314,10 @@ function buildLinesPng(mask: Uint8Array, width: number, height: number): string 
   if (!ctx) throw new Error("2D context unavailable for lines canvas");
   const img = ctx.createImageData(width, height);
   const out = img.data;
-  for (let i = 0; i < mask.length; i++) {
-    if (mask[i] === 1) {
-      const o = i * 4;
-      out[o + 3] = 255; // black is the default zero RGB; just set alpha
-    }
+  for (let i = 0; i < gray.length; i++) {
+    const o = i * 4;
+    // RGB stays 0 (black); alpha = darkness of source pixel.
+    out[o + 3] = 255 - gray[i]!;
   }
   ctx.putImageData(img, 0, 0);
   return c.toDataURL("image/png");
