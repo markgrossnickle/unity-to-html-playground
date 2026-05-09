@@ -37,7 +37,11 @@ const DEFAULTS = {
   threshold: 128,
   minRegion: 50,
   erode: 1,
-  maxDim: 1200,
+  // Cap the long side so a 6000 px scanned line-art doesn't OOM the phone
+  // while parsing. 2400 = 4× the pixel count of the previous 1200 cap, which
+  // keeps detail crisp on retina-class screens without blowing memory or
+  // exceeding localStorage quotas (data-URL grows ~linearly with pixel count).
+  maxDim: 2400,
 } as const;
 
 export async function parseImage(
