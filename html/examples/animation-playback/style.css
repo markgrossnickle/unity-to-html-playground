@@ -29,18 +29,18 @@ body {
   top: 14px;
   left: 14px;
   z-index: 10;
-  color: #8b949e;
+  color: #57606a;
   text-decoration: none;
   font-size: 13px;
-  background: rgba(22, 27, 34, 0.85);
+  background: rgba(255, 255, 255, 0.85);
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid #2a313a;
+  border: 1px solid #d0d7de;
 }
 
 .back:hover {
-  color: #58a6ff;
-  border-color: #58a6ff;
+  color: #0969da;
+  border-color: #0969da;
 }
 
 .hud {
@@ -52,18 +52,18 @@ body {
   display: flex;
   gap: 12px;
   align-items: center;
-  background: rgba(22, 27, 34, 0.92);
+  background: rgba(255, 255, 255, 0.92);
   padding: 10px 14px;
   border-radius: 10px;
-  border: 1px solid #2a313a;
+  border: 1px solid #d0d7de;
   backdrop-filter: blur(6px);
   font-size: 13px;
 }
 
 .hud button {
-  background: #1d242d;
-  color: #e6edf3;
-  border: 1px solid #2a313a;
+  background: #ffffff;
+  color: #1f2328;
+  border: 1px solid #d0d7de;
   padding: 6px 14px;
   border-radius: 6px;
   font-size: 13px;
@@ -71,15 +71,15 @@ body {
 }
 
 .hud button:hover {
-  border-color: #58a6ff;
-  color: #58a6ff;
+  border-color: #0969da;
+  color: #0969da;
 }
 
 .hud .speed {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #8b949e;
+  color: #57606a;
 }
 
 .hud .speed input {
@@ -87,7 +87,7 @@ body {
 }
 
 .hud .speed output {
-  color: #e6edf3;
+  color: #1f2328;
   font-variant-numeric: tabular-nums;
   min-width: 42px;
   text-align: right;

@@ -1,11 +1,11 @@
 :root {
   --bg: #ffffff;
-  --panel: #161b22;
-  --panel-2: #1d242d;
-  --fg: #e6edf3;
-  --muted: #8b949e;
-  --accent: #58a6ff;
-  --border: #2a313a;
+  --panel: #f4f6f8;
+  --panel-2: #ffffff;
+  --fg: #1f2328;
+  --muted: #57606a;
+  --accent: #0969da;
+  --border: #d0d7de;
   --radius: 10px;
   --topbar-h: 56px;
   --rail-w: 320px;
@@ -42,7 +42,7 @@ body {
   color: var(--muted);
   text-decoration: none;
   font-size: 13px;
-  background: rgba(22, 27, 34, 0.85);
+  background: rgba(255, 255, 255, 0.85);
   padding: 6px 12px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -66,7 +66,7 @@ body {
   align-items: center;
   gap: 12px;
   padding: 10px 16px 10px 96px; /* leave room for the .back link */
-  background: rgba(14, 17, 22, 0.92);
+  background: rgba(255, 255, 255, 0.92);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(6px);
   z-index: 20;
@@ -117,7 +117,7 @@ body {
   left: 0;
   right: var(--rail-w);
   bottom: 0;
-  background: #11161d;
+  background: #ffffff;
   /* keep mobile from interpreting drags as page-scroll */
   touch-action: none;
 }
@@ -216,7 +216,7 @@ body {
 .picker {
   position: fixed;
   inset: 0;
-  background: rgba(7, 10, 14, 0.7);
+  background: rgba(15, 20, 25, 0.45);
   display: none;
   align-items: center;
   justify-content: center;
