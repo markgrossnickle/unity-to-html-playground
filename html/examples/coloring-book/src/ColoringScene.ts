@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 
+import { debugFill, debugRedraw, debugResize, debugTap } from "./debug";
 import { events } from "./events";
 import { FillRenderer } from "./FillRenderer";
 import { LabelMap } from "./LabelMap";
@@ -41,7 +42,25 @@ export class ColoringScene extends Phaser.Scene {
 
   create(): void {
     this.container = this.add.container(0, 0);
-    this.scale.on("resize", () => this.layout());
+    this.scale.on("resize", () => {
+      debugResize(this.cameras.main.width, this.cameras.main.height, "scale");
+      this.layout();
+    });
+
+    // Phaser's Scale.RESIZE watches the parent element, but on Android Chrome
+    // an orientation change overlaps the URL-bar transition and the parent
+    // observer can miss the new size until the user interacts again. Listen
+    // at window level too and force a refresh + relayout. rAF defers until
+    // after the browser settles the new viewport metrics.
+    const onWindowResize = (src: string) => () => {
+      requestAnimationFrame(() => {
+        this.scale.refresh();
+        this.layout();
+        debugResize(this.cameras.main.width, this.cameras.main.height, src);
+      });
+    };
+    window.addEventListener("resize", onWindowResize("win"));
+    window.addEventListener("orientationchange", onWindowResize("orient"));
 
     events.on("picture:select", (slug) => this.loadPicture(slug));
     events.on("undo", () => this.undo());
@@ -120,16 +139,25 @@ export class ColoringScene extends Phaser.Scene {
     const y = Math.floor(local.y);
 
     const regionId = this.labelMap.sample(x, y);
-    if (regionId === 0) return;
+    debugTap(x, y, regionId);
+    if (regionId === 0) {
+      debugFill(0, state.selectedColor, false);
+      return;
+    }
 
     const previous = state.fillMap.get(regionId);
     const next = state.selectedColor;
-    if (previous === next) return; // no-op tap on already-this-color region
+    if (previous === next) {
+      // no-op tap on already-this-color region
+      debugFill(regionId, next, false);
+      return;
+    }
 
     pushFill({ regionId, from: previous, to: next });
     state.fillMap.set(regionId, next);
     addRecentColor(next);
     this.redraw();
+    debugFill(regionId, next, true);
   }
 
   private undo(): void {
@@ -167,5 +195,6 @@ export class ColoringScene extends Phaser.Scene {
     this.fillRenderer.render(this.labelMap, state.fillMap);
     const tex = this.textures.get(FILL_TEXTURE_KEY) as Phaser.Textures.CanvasTexture;
     tex.refresh();
+    debugRedraw(state.fillMap.size);
   }
 }

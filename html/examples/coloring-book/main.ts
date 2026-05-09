@@ -1,10 +1,12 @@
 import Phaser from "phaser";
 
 import { ColoringScene } from "./src/ColoringScene";
+import { initDebug } from "./src/debug";
 import { initPalette } from "./src/palette";
 import { initPicker } from "./src/picker";
 import { initToolbar } from "./src/toolbar";
 
+initDebug();
 initPalette();
 initPicker();
 initToolbar();
