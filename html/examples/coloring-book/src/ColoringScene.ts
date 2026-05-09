@@ -124,6 +124,15 @@ export class ColoringScene extends Phaser.Scene {
       .image(0, 0, `${picture.slug}-lines`)
       .setOrigin(0, 0);
 
+    // Imported pictures are the user's source image, untouched — they have a
+    // white interior, not a transparent one. Multiply blending lets the fill
+    // color show through where the source is white while preserving the
+    // outline antialiasing exactly. Built-in pictures already have transparent
+    // interiors so they don't need (or want) the blend change.
+    if (picture.imported) {
+      this.linesImage.setBlendMode(Phaser.BlendModes.MULTIPLY);
+    }
+
     this.container.add([this.fillImage, this.linesImage]);
 
     this.layout();
