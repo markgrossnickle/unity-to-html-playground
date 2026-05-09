@@ -5,13 +5,22 @@ region fills. No backend, no flood-fill at runtime.
 
 ## What's built (M1, M2, partial M3)
 
-- **Ten pictures** — apple, house, star, cat, fish, hot air balloon, cupcake,
-  robot, sailboat, flower. Each is a pair of PNGs in `assets/`:
+- **Thirteen pictures** — apple, house, star, cat, fish, hot air balloon,
+  cupcake, robot, sailboat, flower, plus three richer showcase subjects
+  (wolf, mermaid, unicorn). Each is a pair of PNGs in `assets/`:
   `<slug>_lines.png` (visible outlines) and `<slug>_labels.png` (each region
-  painted a flat region-id; never displayed).
+  painted a flat region-id; never displayed). The first ten are drawn with
+  hand-rolled pngjs primitives; the last three are drawn with node-canvas
+  for proper bezier curves.
+- **Paintable background** — every picture also has a "background" region
+  (label id `255`, picked because nothing else uses it) covering the
+  negative space outside the line-art. Tapping in the empty area paints
+  the background just like any other region. Outline pixels stay as id=0
+  so the lines layer (drawn on top) keeps the silhouette crisp against any
+  background color.
 - **Picture picker** — top-bar button opens a modal grid of thumbnails.
   Auto-fill columns on desktop, 2 columns on phones (≤600 px viewport) so
-  the 10-picture catalog stays comfortably tappable.
+  the 13-picture catalog stays comfortably tappable.
 - **Palette** — 12 swatches in a right-rail (≥44 px tap targets, 3-px white
   selection ring), with a "Recent" row of the last 3 distinct colors used.
 - **Tap to fill** — `pointerdown` → label-map sample → `Map<regionId, hex>`
@@ -63,10 +72,13 @@ See `src/LabelMap.ts` and `src/FillRenderer.ts` for the load + render code.
 npm run gen-coloring-assets
 ```
 
-This runs `scripts/generate-coloring-assets.mjs`, which draws each picture
-with hand-rolled pngjs primitives (no node-canvas dependency). Both PNGs in
-each pair are deterministic, so re-running the script over a clean checkout
-produces a no-op git diff.
+This runs `scripts/generate-coloring-assets.mjs`. The first ten pictures
+are drawn with hand-rolled pngjs primitives; the wolf, mermaid, and unicorn
+use node-canvas for proper bezier curves. After rendering, every picture
+is run through one extra pass that tags every pixel that's NOT inside any
+hand-drawn region AND NOT under an outline pixel as the background region
+(label id `255`). Both PNGs in each pair are deterministic, so re-running
+the script over a clean checkout produces a no-op git diff.
 
 ## Layout
 
@@ -86,7 +98,10 @@ examples/coloring-book/
 │   ├── cupcake_lines.png  + cupcake_labels.png
 │   ├── robot_lines.png    + robot_labels.png
 │   ├── sailboat_lines.png + sailboat_labels.png
-│   └── flower_lines.png   + flower_labels.png
+│   ├── flower_lines.png   + flower_labels.png
+│   ├── wolf_lines.png     + wolf_labels.png
+│   ├── mermaid_lines.png  + mermaid_labels.png
+│   └── unicorn_lines.png  + unicorn_labels.png
 └── src/
     ├── ColoringScene.ts   Phaser scene: layout, pointer, redraw
     ├── LabelMap.ts        labels-PNG → ImageData decoder + sampler
