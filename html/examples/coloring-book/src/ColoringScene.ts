@@ -4,7 +4,7 @@ import { debugFill, debugRedraw, debugResize, debugTap } from "./debug";
 import { events } from "./events";
 import { FillRenderer } from "./FillRenderer";
 import { LabelMap } from "./LabelMap";
-import { findPicture, PICTURES, type Picture } from "./pictures";
+import { findPicture, PICTURES, type Picture, getAllPictures } from "./pictures";
 import { exportPng, saveOrShare } from "./save";
 import {
   addRecentColor,
@@ -63,6 +63,7 @@ export class ColoringScene extends Phaser.Scene {
     window.addEventListener("orientationchange", onWindowResize("orient"));
 
     events.on("picture:select", (slug) => this.loadPicture(slug));
+    events.on("picture:removed", (slug) => this.onPictureRemoved(slug));
     events.on("undo", () => this.undo());
     events.on("clear", () => this.clearPaint());
     events.on("save", () => {
@@ -81,8 +82,28 @@ export class ColoringScene extends Phaser.Scene {
   private loadPicture(slug: string): void {
     const picture = findPicture(slug);
     if (!picture) return;
+
+    const linesKey = `${slug}-lines`;
+    const labelsKey = `${slug}-labels`;
+    if (this.textures.exists(linesKey) && this.textures.exists(labelsKey)) {
+      this.applyPicture(picture);
+      return;
+    }
+
+    // Imported pictures aren't in the preload manifest — pull them in via the
+    // loader on demand. Phaser accepts data: URLs as image sources directly.
+    this.load.image(linesKey, picture.linesUrl);
+    this.load.image(labelsKey, picture.labelsUrl);
+    this.load.once("complete", () => this.applyPicture(picture));
+    this.load.once("loaderror", () => {
+      window.alert(`Could not load "${picture.title}"`);
+    });
+    this.load.start();
+  }
+
+  private applyPicture(picture: Picture): void {
     this.currentPicture = picture;
-    resetForPicture(slug);
+    resetForPicture(picture.slug);
 
     // Clean up the previous picture's display objects + cached fill texture.
     this.container.removeAll(true);
@@ -91,18 +112,16 @@ export class ColoringScene extends Phaser.Scene {
     }
 
     const labelsSrc = this.textures
-      .get(`${slug}-labels`)
+      .get(`${picture.slug}-labels`)
       .getSourceImage() as HTMLImageElement;
     this.labelMap = LabelMap.fromImage(labelsSrc);
 
     this.fillRenderer = new FillRenderer(this.labelMap.width, this.labelMap.height);
     this.textures.addCanvas(FILL_TEXTURE_KEY, this.fillRenderer.canvas);
 
-    this.fillImage = this.add
-      .image(0, 0, FILL_TEXTURE_KEY)
-      .setOrigin(0, 0);
+    this.fillImage = this.add.image(0, 0, FILL_TEXTURE_KEY).setOrigin(0, 0);
     this.linesImage = this.add
-      .image(0, 0, `${slug}-lines`)
+      .image(0, 0, `${picture.slug}-lines`)
       .setOrigin(0, 0);
 
     this.container.add([this.fillImage, this.linesImage]);
@@ -158,6 +177,18 @@ export class ColoringScene extends Phaser.Scene {
     addRecentColor(next);
     this.redraw();
     debugFill(regionId, next, true);
+  }
+
+  private onPictureRemoved(slug: string): void {
+    const linesKey = `${slug}-lines`;
+    const labelsKey = `${slug}-labels`;
+    if (this.textures.exists(linesKey)) this.textures.remove(linesKey);
+    if (this.textures.exists(labelsKey)) this.textures.remove(labelsKey);
+    if (this.currentPicture?.slug === slug) {
+      // Fall back to the first available picture (always a built-in).
+      const fallback = getAllPictures()[0];
+      if (fallback) this.loadPicture(fallback.slug);
+    }
   }
 
   private undo(): void {

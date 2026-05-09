@@ -10,6 +10,8 @@ export interface EventMap {
   clear: void;
   save: void;
   "recent:update": void;
+  "pictures:update": void; // imported list changed (added/removed)
+  "picture:removed": string; // slug — for downstream cleanup (Phaser textures, etc.)
 }
 
 type Listener<E extends keyof EventMap> = (payload: EventMap[E]) => void;
