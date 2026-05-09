@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Coloring Book — Unity → HTML Playground</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <a class="back" href="/index.html">← back</a>
+
+    <div class="topbar">
+      <div class="topbar-left">
+        <button id="btn-pictures" type="button" class="topbtn">
+          Pick a picture
+        </button>
+      </div>
+      <h1 class="title">Coloring Book</h1>
+      <div class="topbar-right">
+        <button id="btn-undo" type="button" class="topbtn">Undo</button>
+        <button id="btn-clear" type="button" class="topbtn">Clear</button>
+      </div>
+    </div>
+
+    <div id="game" class="game"></div>
+
+    <aside class="palette" id="palette">
+      <div class="palette-section">
+        <span class="palette-label">Recent</span>
+        <div class="palette-row" id="palette-recent"></div>
+        <span id="palette-recent-empty" class="palette-empty">
+          Tap a region to start coloring
+        </span>
+      </div>
+      <div class="palette-section">
+        <span class="palette-label">Colors</span>
+        <div class="palette-grid" id="palette-grid"></div>
+      </div>
+    </aside>
+
+    <div class="picker" id="picker-modal" role="dialog" aria-modal="true">
+      <div class="picker-card">
+        <header>
+          <h2>Pick a picture</h2>
+          <button
+            id="picker-close"
+            type="button"
+            class="picker-close"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+        <div class="picker-grid" id="picker-grid"></div>
+      </div>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
