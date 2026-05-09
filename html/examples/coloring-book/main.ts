@@ -12,7 +12,7 @@ initToolbar();
 new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
-  backgroundColor: "#0e1116",
+  backgroundColor: "#ffffff",
   scale: {
     mode: Phaser.Scale.RESIZE,
     width: window.innerWidth,
