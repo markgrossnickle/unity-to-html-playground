@@ -51,6 +51,45 @@ export class FillRenderer {
       out[i + 3] = 255;
     }
 
+    // Dilate the painted pixels by 1px to fill the antialiased ring left by
+    // the parser's erode pass. Without this, the 1px edge of each region
+    // shows the source image's white interior unchanged, producing a white
+    // halo around every fill. The outline overlay is multiplied on top, so
+    // dilating into the outline pixels is harmless — black × any color = black.
+    this.dilateOnce(labelMap.width, labelMap.height);
+
     this.ctx.putImageData(this.imageData, 0, 0);
+  }
+
+  private dilateOnce(width: number, height: number): void {
+    const out = this.imageData.data;
+    const total = width * height;
+
+    // Snapshot which pixels were filled before dilation; we only spread from
+    // those, never from a pixel we just dilated, so the ring stays exactly 1px.
+    const filled = new Uint8Array(total);
+    for (let p = 0; p < total; p++) {
+      if (out[p * 4 + 3]! > 0) filled[p] = 1;
+    }
+
+    for (let y = 0; y < height; y++) {
+      const rowStart = y * width;
+      for (let x = 0; x < width; x++) {
+        const p = rowStart + x;
+        if (filled[p]) continue;
+        let donor = -1;
+        if (x > 0 && filled[p - 1]) donor = p - 1;
+        else if (x < width - 1 && filled[p + 1]) donor = p + 1;
+        else if (y > 0 && filled[p - width]) donor = p - width;
+        else if (y < height - 1 && filled[p + width]) donor = p + width;
+        if (donor < 0) continue;
+        const o = p * 4;
+        const d = donor * 4;
+        out[o] = out[d]!;
+        out[o + 1] = out[d + 1]!;
+        out[o + 2] = out[d + 2]!;
+        out[o + 3] = 255;
+      }
+    }
   }
 }
