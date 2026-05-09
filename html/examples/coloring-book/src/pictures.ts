@@ -21,6 +21,12 @@ import sailboatLines from "../assets/sailboat_lines.png?url";
 import sailboatLabels from "../assets/sailboat_labels.png?url";
 import flowerLines from "../assets/flower_lines.png?url";
 import flowerLabels from "../assets/flower_labels.png?url";
+import wolfLines from "../assets/wolf_lines.png?url";
+import wolfLabels from "../assets/wolf_labels.png?url";
+import mermaidLines from "../assets/mermaid_lines.png?url";
+import mermaidLabels from "../assets/mermaid_labels.png?url";
+import unicornLines from "../assets/unicorn_lines.png?url";
+import unicornLabels from "../assets/unicorn_labels.png?url";
 
 export interface Picture {
   slug: string;
@@ -59,6 +65,19 @@ export const PICTURES: Picture[] = [
     title: "Flower",
     linesUrl: flowerLines,
     labelsUrl: flowerLabels,
+  },
+  { slug: "wolf", title: "Wolf", linesUrl: wolfLines, labelsUrl: wolfLabels },
+  {
+    slug: "mermaid",
+    title: "Mermaid",
+    linesUrl: mermaidLines,
+    labelsUrl: mermaidLabels,
+  },
+  {
+    slug: "unicorn",
+    title: "Unicorn",
+    linesUrl: unicornLines,
+    labelsUrl: unicornLabels,
   },
 ];
 
