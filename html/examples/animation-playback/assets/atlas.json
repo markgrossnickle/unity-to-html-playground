@@ -1,0 +1,95 @@
+{
+  "frames": {
+    "torso": {
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 96,
+        "h": 128
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 96,
+        "h": 128
+      },
+      "sourceSize": {
+        "w": 96,
+        "h": 128
+      }
+    },
+    "head_01": {
+      "frame": {
+        "x": 0,
+        "y": 130,
+        "w": 64,
+        "h": 64
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 64
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 64
+      }
+    },
+    "head_02": {
+      "frame": {
+        "x": 0,
+        "y": 196,
+        "w": 64,
+        "h": 64
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 64
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 64
+      }
+    },
+    "arm": {
+      "frame": {
+        "x": 0,
+        "y": 262,
+        "w": 24,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 24,
+        "h": 80
+      }
+    }
+  },
+  "meta": {
+    "app": "scripts/gen-sample-assets.mjs",
+    "version": "1.0",
+    "image": "atlas.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 96,
+      "h": 344
+    },
+    "scale": "1"
+  }
+}
