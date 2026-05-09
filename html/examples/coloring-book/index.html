@@ -17,6 +17,15 @@
         <button id="btn-pictures" type="button" class="topbtn">
           Pick a picture
         </button>
+        <button id="btn-import" type="button" class="topbtn">
+          Import
+        </button>
+        <input
+          id="import-file"
+          type="file"
+          accept="image/png,image/jpeg"
+          hidden
+        />
       </div>
       <h1 class="title">Coloring Book</h1>
       <div class="topbar-right">
@@ -56,6 +65,13 @@
           </button>
         </header>
         <div class="picker-grid" id="picker-grid"></div>
+      </div>
+    </div>
+
+    <div id="import-overlay" class="overlay" hidden>
+      <div class="overlay-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <span id="import-overlay-text">Parsing image…</span>
       </div>
     </div>
 
