@@ -38,6 +38,35 @@ region fills. No backend, no flood-fill at runtime.
   horizontally-scrolling strip. `touch-action: none` on the canvas so taps
   don't get stolen by browser scroll/zoom.
 
+## Importing your own line art
+
+Tap **Import** in the toolbar and pick a black-on-white PNG or JPG (a
+photographed coloring-book page works fine — just make sure the lines are
+darker than the paper). The browser parser runs the same pipeline as the
+Node-side `scripts/parse-line-art.mjs`:
+
+1. Downscale to ≤1200 px on the long edge so parsing fits in ~3s on
+   mid-range mobile.
+2. Grayscale → threshold (default 128).
+3. One erode pass to absorb antialiased outline edges.
+4. Iterative stack-based 4-connected flood-fill to label every fillable
+   region.
+5. Drop regions smaller than 50 px (folded back into the outline so the
+   lines layer covers them).
+6. Pick the largest border-touching region as background (region id 255).
+7. Emit lines / labels canvases in the same RGBA format as the built-ins.
+
+Imported pictures appear in the picker grid alongside the built-ins with
+an **Imported** badge and a small **×** delete button. They're saved to
+`localStorage` under `coloringbook_imported_v1` (cap of 20, FIFO eviction)
+so they survive page refreshes. If `localStorage` fills up the import
+fails with a friendly message — remove an imported picture and try again.
+
+The parser is `src/importParser.ts`; the storage layer is in
+`src/pictures.ts`. Parsing is plain JS on the main thread (no Workers, no
+WASM, no extra deps) — for the target source sizes the difference isn't
+worth the complexity.
+
 ## How the fill works
 
 We picked the **hybrid label-map** approach (PLAN.md §2.2 "C") over the obvious
@@ -106,12 +135,13 @@ examples/coloring-book/
     ├── ColoringScene.ts   Phaser scene: layout, pointer, redraw
     ├── LabelMap.ts        labels-PNG → ImageData decoder + sampler
     ├── FillRenderer.ts    off-screen canvas writer (per-pixel pass)
-    ├── pictures.ts        static catalog of (slug, title, urls)
+    ├── pictures.ts        catalog of built-ins + localStorage-backed imports
+    ├── importParser.ts    in-browser port of scripts/parse-line-art.mjs
     ├── state.ts           selectedColor, fillMap, history, recentColors
     ├── events.ts          typed pub/sub between DOM controllers and the scene
     ├── palette.ts         right-rail swatches + recent row
-    ├── picker.ts          modal grid of thumbnails
-    ├── toolbar.ts         undo/clear/save button wiring
+    ├── picker.ts          modal grid of thumbnails (built-in + imported)
+    ├── toolbar.ts         undo/clear/save + import button wiring
     ├── save.ts            composite-to-PNG + share-or-download
     └── color.ts           hex → RGB
 ```
