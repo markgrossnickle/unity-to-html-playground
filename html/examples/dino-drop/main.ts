@@ -27,10 +27,16 @@ const game = new Phaser.Game({
   scene: [DinoScene],
 });
 
-const scene = game.scene.getScene("DinoScene") as DinoScene;
-
-// Boot the drawer once the scene is created.
+// Defer scene lookup until Phaser has wired the scene manager — calling
+// getScene() synchronously after `new Phaser.Game(...)` returns null and the
+// later attachDrawer() throws on the null ref, which silently trashes the
+// page (visible as a black screen on mobile).
 game.events.once(Phaser.Core.Events.READY, () => {
+  const scene = game.scene.getScene("DinoScene") as DinoScene | null;
+  if (!scene) {
+    console.error("DinoScene not registered after READY");
+    return;
+  }
   const drawer = initDrawer(drawerHost, DRAWER_OBJECTS, ({ id, clientX, clientY }) => {
     scene.spawnAt(id, clientX, clientY);
   });

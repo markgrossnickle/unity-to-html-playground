@@ -19,9 +19,15 @@ const game = new Phaser.Game({
   scene: [StickerScene],
 });
 
-const scene = game.scene.getScene("StickerScene") as StickerScene;
-
+// Defer scene lookup until READY — getScene() returns null synchronously
+// after `new Phaser.Game(...)`, and the later attachDrawer() throws on the
+// null ref, which silently trashes the page (visible as a black screen).
 game.events.once(Phaser.Core.Events.READY, () => {
+  const scene = game.scene.getScene("StickerScene") as StickerScene | null;
+  if (!scene) {
+    console.error("StickerScene not registered after READY");
+    return;
+  }
   const drawer = initStickerDrawer(drawerHost, STICKER_DEFS, ({ id, clientX, clientY }) => {
     scene.spawnAt(id, clientX, clientY);
   });
