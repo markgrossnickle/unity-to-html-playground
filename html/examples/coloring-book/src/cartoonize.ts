@@ -3,35 +3,57 @@
 // (threshold + erode → CC labeling) can swallow as if the user had handed us
 // hand-drawn line art.
 //
-// Pipeline:
-//   1. RGBA → luma (Float32 grayscale).
-//   2. Separable Gaussian blur (horizontal then vertical pass) — kills JPEG
-//      noise and stops the Sobel pass from finding edges in every gradient.
-//   3. Sobel 3x3 gradient magnitude (|gx| + |gy|, the cheap L1 form).
-//   4. Threshold magnitude → binary edge map.
-//   5. Optional thinning: remove edge pixels with too many edge neighbors so a
-//      thick edge band collapses toward its center line. Cheap proxy for
-//      Zhang-Suen, good enough for region-fill.
-//   6. Output ImageData: edge = pure black opaque, non-edge = pure white opaque.
+// Pipeline: posterize → boundary trace.
 //
-// All passes operate on the source resolution (caller is responsible for any
-// downscaling). Hot loops use typed arrays; allocations stay flat.
+//   1. Heavy separable Gaussian blur (σ ~2.5). The point is not denoising —
+//      it is to wash out fine detail so adjacent similar colors merge into
+//      flat regions before quantization. Without this, noise survives
+//      quantization and the boundary trace lights up on per-pixel speckle.
+//   2. Uniform RGB quantization to N levels per channel (N=4 → 64 colors).
+//      Cheap, predictable, and at N=4 already produces a strong posterized
+//      look. K-means / median-cut would be smarter but slower and more code,
+//      and the gains don't show through the downstream label pass.
+//   3. Boundary trace on the quantized image: for each pixel, compare to its
+//      right and down neighbor; if either differs, mark it an edge. (Right-
+//      and-down only, so we do not double-mark both sides of a boundary.)
+//   4. Optional 1-px morphological dilation, 4-connected. Lines render as
+//      2-px-wide strokes — reads as "drawn" rather than "scanned line."
+//   5. Output ImageData: edge → pure black opaque, non-edge → pure white opaque.
 //
-// Tunables live as defaults on CartoonizeOptions — exposed as constants here
-// so a future UI can wire sliders without changing the algorithm.
+// WHY this beats Sobel-then-threshold:
+//
+//   Sobel responds to per-pixel intensity gradients. A smooth tonal ramp
+//   across a fur patch produces a sea of weak gradients; threshold them and
+//   you get a constellation of dots, not a line. Following with morphological
+//   thinning makes it worse — every speckle gets carved further apart.
+//
+//   Posterize-then-trace works the opposite way: we collapse smooth ramps
+//   into flat regions on purpose, then draw a line precisely where two
+//   regions meet. The result is a small number of long, continuous outlines —
+//   the silhouette, the eyes, the major interior boundaries — instead of a
+//   field of broken dots.
+//
+// All passes operate on the source resolution. Hot loops use typed arrays;
+// allocations stay flat. Performance target: <1.5 s for a 2400×2400 source on
+// Android Chrome (a one-time cost at import).
 
 export interface CartoonizeOptions {
-  blurSigma?: number;       // gaussian sigma in pixels; 1.4 ~ a 9-tap kernel
-  edgeThreshold?: number;   // 0-255 magnitude cutoff; lower = more detail
-  thinIterations?: number;  // 0 = no thinning; 1 = single morphological pass
-  invert?: boolean;         // true → black outline on white (the default we want)
+  blurSigma?: number;       // gaussian sigma in pixels; 2.5 ≈ 15-tap kernel
+  quantizeLevels?: number;  // levels per RGB channel (4 → 64 colors total)
+  dilate?: number;          // morphological dilation iterations (line thickness − 1)
+
+  // Deprecated. Old Sobel-pipeline knobs; accepted but ignored so callers that
+  // were typed against the previous shape (e.g. importParser, future UIs)
+  // still compile.
+  edgeThreshold?: number;
+  thinIterations?: number;
+  invert?: boolean;
 }
 
-const DEFAULTS: Required<CartoonizeOptions> = {
-  blurSigma: 1.4,
-  edgeThreshold: 60,
-  thinIterations: 1,
-  invert: true,
+const DEFAULTS = {
+  blurSigma: 2.5,
+  quantizeLevels: 4,
+  dilate: 1,
 };
 
 export function cartoonizeImageData(
@@ -39,48 +61,85 @@ export function cartoonizeImageData(
   opts: CartoonizeOptions = {}
 ): ImageData {
   const blurSigma = opts.blurSigma ?? DEFAULTS.blurSigma;
-  const edgeThreshold = opts.edgeThreshold ?? DEFAULTS.edgeThreshold;
-  const thinIterations = opts.thinIterations ?? DEFAULTS.thinIterations;
-  const invert = opts.invert ?? DEFAULTS.invert;
+  const quantizeLevels = Math.max(2, opts.quantizeLevels ?? DEFAULTS.quantizeLevels);
+  const dilate = Math.max(0, opts.dilate ?? DEFAULTS.dilate);
 
   const { width, height, data } = src;
   const N = width * height;
 
-  // Step 1 — luma. Rec. 601 to match the rest of the parser.
-  const gray = new Float32Array(N);
-  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    gray[j] = (data[i]! * 299 + data[i + 1]! * 587 + data[i + 2]! * 114) / 1000;
+  // Step 1 — split into R/G/B float planes, then blur each. Working in three
+  // planes (instead of one luma plane) preserves color contrast that drives
+  // the boundary trace later — two regions with the same luminance but
+  // different hue must still produce a boundary.
+  const rPlane = new Float32Array(N);
+  const gPlane = new Float32Array(N);
+  const bPlane = new Float32Array(N);
+  for (let i = 0, j = 0; j < N; i += 4, j++) {
+    rPlane[j] = data[i]!;
+    gPlane[j] = data[i + 1]!;
+    bPlane[j] = data[i + 2]!;
   }
 
-  // Step 2 — separable Gaussian.
-  const blurred = gaussianBlur(gray, width, height, blurSigma);
+  const rBlur = gaussianBlur(rPlane, width, height, blurSigma);
+  const gBlur = gaussianBlur(gPlane, width, height, blurSigma);
+  const bBlur = gaussianBlur(bPlane, width, height, blurSigma);
 
-  // Step 3 — Sobel magnitude (L1 norm; ~half the cost of L2 with imperceptible
-  // difference once we threshold).
-  const mag = sobelMagnitude(blurred, width, height);
-
-  // Step 4 — threshold.
-  const edge = new Uint8Array(N);
-  for (let i = 0; i < N; i++) edge[i] = mag[i]! >= edgeThreshold ? 1 : 0;
-
-  // Step 5 — optional thinning. Each pass strips edge pixels surrounded by
-  // ≥6 of 8 edge neighbors; skeletonizes thick edge bands without erasing
-  // single-pixel-wide strokes (which have ≤2 edge neighbors).
-  // Explicit type annotation so the inferred ArrayBuffer flavor of `edge` and
-  // the wider one returned by `thinOnce` don't clash under strict TS.
-  let thinned: Uint8Array = edge;
-  for (let i = 0; i < thinIterations; i++) {
-    thinned = thinOnce(thinned, width, height);
+  // Step 2 — uniform per-channel quantization. step = 256 / N produces N bins
+  // of equal width; we map each blurred sample to its bin index (0..N−1).
+  // Storing the bin index (not the reconstructed color) keeps the comparison
+  // in step 3 cheap: a single integer compare per channel.
+  //
+  // We pack the three bin indices into a single uint16 ID per pixel, so the
+  // boundary check is one int compare instead of three. With levelsPerChannel
+  // ≤ 16, three 4-bit fields fit comfortably in 16 bits.
+  const step = 256 / quantizeLevels;
+  const id = new Uint16Array(N);
+  for (let p = 0; p < N; p++) {
+    let r = (rBlur[p]! / step) | 0;
+    let g = (gBlur[p]! / step) | 0;
+    let b = (bBlur[p]! / step) | 0;
+    if (r >= quantizeLevels) r = quantizeLevels - 1;
+    if (g >= quantizeLevels) g = quantizeLevels - 1;
+    if (b >= quantizeLevels) b = quantizeLevels - 1;
+    id[p] = (r << 8) | (g << 4) | b;
   }
 
-  // Step 6 — pack to RGBA. Edge → black (or white if !invert); non-edge → the
-  // opposite. Alpha is always 255 so the downstream parser sees no surprises.
+  // Step 3 — boundary trace. We walk every pixel except the right/bottom edge
+  // and compare against the right and down neighbors only. If either differs,
+  // mark the current pixel as edge. This single-side comparison guarantees
+  // each boundary is drawn exactly once (on the upper/left side), giving a
+  // crisp 1-pixel line rather than a 2-pixel doubled line.
+  // Explicit annotation: `edge` is reassigned from `dilate4`, whose return
+  // type widens to Uint8Array<ArrayBufferLike>; the inferred narrower type
+  // from `new Uint8Array(N)` would clash under strict TS.
+  let edge: Uint8Array = new Uint8Array(N);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      const c = id[i]!;
+      if (x + 1 < width && id[i + 1]! !== c) {
+        edge[i] = 1;
+        continue;
+      }
+      if (y + 1 < height && id[i + width]! !== c) {
+        edge[i] = 1;
+      }
+    }
+  }
+
+  // Step 4 — optional dilation, 4-connected, repeated `dilate` times.
+  // Each pass thickens the line by one pixel. We snapshot before each pass
+  // so we never read pixels we just wrote in the same iteration.
+  for (let d = 0; d < dilate; d++) {
+    edge = dilate4(edge, width, height);
+  }
+
+  // Step 5 — pack to RGBA. Edge → black, non-edge → white. Alpha 255 always,
+  // matching the contract the rest of the import pipeline expects.
   const out = new ImageData(width, height);
   const o = out.data;
-  const fg = invert ? 0 : 255;     // outline color
-  const bg = invert ? 255 : 0;     // fillable interior color
   for (let p = 0; p < N; p++) {
-    const v = thinned[p] === 1 ? fg : bg;
+    const v = edge[p] === 1 ? 0 : 255;
     const i = p * 4;
     o[i] = v;
     o[i + 1] = v;
@@ -90,10 +149,9 @@ export function cartoonizeImageData(
   return out;
 }
 
-// Separable Gaussian blur over a Float32 grayscale buffer. Two 1-D passes
-// (horizontal into a temp buffer, then vertical back into a result buffer)
-// gives O(N·k) instead of O(N·k²) for a k-tap kernel. Edge handling clamps
-// the read index so the blur never reads off the image.
+// Separable Gaussian blur over a Float32 plane. Two 1-D passes
+// (horizontal into a temp buffer, then vertical into the result) gives
+// O(N·k) instead of O(N·k²) for a k-tap kernel. Edges clamp.
 function gaussianBlur(
   src: Float32Array,
   width: number,
@@ -104,7 +162,6 @@ function gaussianBlur(
   const radius = (kernel.length - 1) / 2;
 
   const tmp = new Float32Array(src.length);
-  // Horizontal pass: src → tmp
   for (let y = 0; y < height; y++) {
     const row = y * width;
     for (let x = 0; x < width; x++) {
@@ -120,7 +177,6 @@ function gaussianBlur(
   }
 
   const dst = new Float32Array(src.length);
-  // Vertical pass: tmp → dst
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       let sum = 0;
@@ -137,7 +193,7 @@ function gaussianBlur(
 }
 
 function buildGaussianKernel(sigma: number): Float32Array {
-  // Truncate at 3σ. For σ=1.4 that's a 9-tap kernel; tiny and fast.
+  // Truncate at 3σ. For σ=2.5 that's a 15-tap kernel.
   const radius = Math.max(1, Math.ceil(sigma * 3));
   const size = radius * 2 + 1;
   const k = new Float32Array(size);
@@ -153,62 +209,20 @@ function buildGaussianKernel(sigma: number): Float32Array {
   return k;
 }
 
-// Sobel 3x3 over a Float32 buffer; returns gradient magnitude as Float32 in
-// the loose 0..~1020 range (we threshold against an 0..255 cutoff so the
-// scale is fine — small JPEG noise sits well under any sensible threshold).
-//
-// Border pixels get magnitude 0 (one pixel in from each edge). The image
-// frame produced by the source-on-white canvas would otherwise show as a hard
-// edge along every side; zeroing the border kills that artifact.
-function sobelMagnitude(
-  src: Float32Array,
-  width: number,
-  height: number
-): Float32Array {
-  const out = new Float32Array(src.length);
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
+// 4-connected morphological dilation. Each output pixel is lit iff itself or
+// any N/E/S/W neighbor is lit in the snapshot. Reading from the input
+// snapshot (not in-place) keeps the iteration uniform — dilation never
+// "spreads" within a single pass.
+function dilate4(src: Uint8Array, width: number, height: number): Uint8Array {
+  const out = new Uint8Array(src.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
       const i = y * width + x;
-      const tl = src[i - width - 1]!;
-      const t  = src[i - width]!;
-      const tr = src[i - width + 1]!;
-      const l  = src[i - 1]!;
-      const r  = src[i + 1]!;
-      const bl = src[i + width - 1]!;
-      const b  = src[i + width]!;
-      const br = src[i + width + 1]!;
-      // Standard Sobel kernels.
-      const gx = -tl - 2 * l - bl + tr + 2 * r + br;
-      const gy = -tl - 2 * t - tr + bl + 2 * b + br;
-      const a = gx < 0 ? -gx : gx;
-      const c = gy < 0 ? -gy : gy;
-      out[i] = a + c;
-    }
-  }
-  return out;
-}
-
-// Single-pass morphological thinning: strip pixels with too many lit
-// neighbors so thick edge bands collapse toward their center. Single-pixel
-// strokes (≤2 neighbors) survive untouched; heavy 3-pixel-wide bands shrink.
-// Not a true skeletonize — but a true Zhang-Suen would double the file and
-// the labeling pass behind us is forgiving enough that this is sufficient.
-function thinOnce(src: Uint8Array, width: number, height: number): Uint8Array {
-  const out = new Uint8Array(src);
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const i = y * width + x;
-      if (src[i] !== 1) continue;
-      let n = 0;
-      n += src[i - width - 1]!;
-      n += src[i - width]!;
-      n += src[i - width + 1]!;
-      n += src[i - 1]!;
-      n += src[i + 1]!;
-      n += src[i + width - 1]!;
-      n += src[i + width]!;
-      n += src[i + width + 1]!;
-      if (n >= 6) out[i] = 0;
+      if (src[i] === 1) { out[i] = 1; continue; }
+      if (x > 0 && src[i - 1] === 1) { out[i] = 1; continue; }
+      if (x + 1 < width && src[i + 1] === 1) { out[i] = 1; continue; }
+      if (y > 0 && src[i - width] === 1) { out[i] = 1; continue; }
+      if (y + 1 < height && src[i + width] === 1) { out[i] = 1; continue; }
     }
   }
   return out;
