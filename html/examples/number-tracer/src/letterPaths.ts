@@ -99,25 +99,24 @@ const A: Pt[][] = [
   line({ x: 145, y: 360 }, { x: 255, y: 360 }, 30),
 ];
 
-// B — 2 strokes: vertical, then one continuous double-bump
-// (top bump back to midline, bottom bump back to baseline).
+// B — 3 strokes per HWT: (1) vertical line down from upper-left to baseline,
+// "frog jump" back to top, (2) top bump from upper-left around to middle-left,
+// "frog jump" back to middle, (3) bottom bump from middle-left around to baseline.
 const B: Pt[][] = [
   line({ x: 110, y: 100 }, { x: 110, y: 500 }, 45),
-  chain(
-    cubic(
-      { x: 110, y: 100 },
-      { x: 280, y: 100 },
-      { x: 280, y: 290 },
-      { x: 110, y: 300 },
-      30
-    ),
-    cubic(
-      { x: 110, y: 300 },
-      { x: 290, y: 310 },
-      { x: 290, y: 500 },
-      { x: 110, y: 500 },
-      30
-    )
+  cubic(
+    { x: 110, y: 100 },
+    { x: 280, y: 100 },
+    { x: 280, y: 290 },
+    { x: 110, y: 300 },
+    40
+  ),
+  cubic(
+    { x: 110, y: 300 },
+    { x: 290, y: 310 },
+    { x: 290, y: 500 },
+    { x: 110, y: 500 },
+    40
   ),
 ];
 
