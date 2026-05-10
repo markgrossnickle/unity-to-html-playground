@@ -28,6 +28,131 @@ export const DRAWER_OBJECTS: ReadonlyArray<DrawerObject> = [
 const TEX_DINO_BODY = "dinoBody";
 const TEX_DINO_TAIL = "dinoTail";
 const PLANK_THICKNESS = 6;
+const VISUAL_SCALE = 0.7;
+
+// ---- per-object collider + physics defs ---------------------------------
+//
+// Shapes are authored in the sprite's native 96×96 art-space and then
+// uniformly scaled by VISUAL_SCALE alongside the sprite (Phaser's
+// MatterImage.setScale scales both visual and body). The numbers below
+// describe roughly the visible silhouette of each thumbnail — not the
+// full 96×96 frame — so the collider hugs the art tightly rather than
+// approximating everything as a circle (which made the box roll like a
+// ball).
+
+interface SpawnDef {
+  shape: Phaser.Types.Physics.Matter.MatterSetBodyConfig;
+  density: number;
+  restitution: number;
+  friction: number;
+}
+
+function ellipseVerts(rx: number, ry: number, n: number): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < n; i++) {
+    const t = (i / n) * Math.PI * 2;
+    out.push({ x: Math.cos(t) * rx, y: Math.sin(t) * ry });
+  }
+  return out;
+}
+
+function starVerts(outer: number, inner: number, points: number): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const t = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2; // top point up
+    out.push({ x: Math.cos(t) * r, y: Math.sin(t) * r });
+  }
+  return out;
+}
+
+// Ice-cream outline: scoop arc on top, cone tip below. The shape is
+// authored convex so Matter doesn't have to invoke poly-decomp.
+const ICE_CREAM_VERTS: Array<{ x: number; y: number }> = [
+  { x: -20, y: -8 },
+  { x: -16, y: -22 },
+  { x: 0, y: -28 },
+  { x: 16, y: -22 },
+  { x: 20, y: -8 },
+  { x: 0, y: 32 },
+];
+
+const SPAWN_DEFS: Record<string, SpawnDef> = {
+  ball: {
+    shape: { type: "circle", radius: 30 },
+    density: 0.0012,
+    restitution: 0.55,
+    friction: 0.04,
+  },
+  block: {
+    // Axis-aligned rectangle so the block doesn't roll.
+    shape: { type: "rectangle", width: 60, height: 60 },
+    density: 0.0045,
+    restitution: 0.05,
+    friction: 0.5,
+  },
+  triangle: {
+    shape: {
+      type: "fromVerts",
+      verts: [{ x: 0, y: -28 }, { x: 30, y: 22 }, { x: -30, y: 22 }],
+      flagInternal: false,
+    },
+    density: 0.0022,
+    restitution: 0.15,
+    friction: 0.1,
+  },
+  banana: {
+    // Elongated horizontal ellipse — capsule-like approximation.
+    shape: {
+      type: "fromVerts",
+      verts: ellipseVerts(34, 14, 10),
+      flagInternal: false,
+    },
+    density: 0.0014,
+    restitution: 0.3,
+    friction: 0.06,
+  },
+  star: {
+    // 5-point star, 10 alternating verts. Concave; Matter decomposes
+    // via the bundled poly-decomp.
+    shape: {
+      type: "fromVerts",
+      verts: starVerts(32, 14, 5),
+      flagInternal: false,
+    },
+    density: 0.002,
+    restitution: 0.3,
+    friction: 0.12,
+  },
+  donut: {
+    // Hole isn't relevant for collisions — players won't notice.
+    shape: { type: "circle", radius: 30 },
+    density: 0.004,
+    restitution: 0.1,
+    friction: 0.4,
+  },
+  apple: {
+    // Slightly squished vertically.
+    shape: {
+      type: "fromVerts",
+      verts: ellipseVerts(30, 27, 12),
+      flagInternal: false,
+    },
+    density: 0.0022,
+    restitution: 0.25,
+    friction: 0.15,
+  },
+  "ice-cream": {
+    shape: {
+      type: "fromVerts",
+      verts: ICE_CREAM_VERTS,
+      flagInternal: false,
+    },
+    density: 0.002,
+    restitution: 0.2,
+    friction: 0.15,
+  },
+};
 
 interface DroppedBody extends Phaser.Physics.Matter.Image {
   /** Original drawer-object id, so the return tween knows which slot to fly to. */
@@ -210,6 +335,8 @@ export class DinoScene extends Phaser.Scene {
   }
 
   private spawnObjectAtClient(id: string, clientX: number, clientY: number): void {
+    const def = SPAWN_DEFS[id];
+    if (!def) return;
     const canvas = this.game.canvas;
     const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
@@ -218,16 +345,15 @@ export class DinoScene extends Phaser.Scene {
 
     const tex = `obj-${id}`;
     const body = this.matter.add.image(x, y, tex, undefined, {
-      shape: { type: "circle", radius: 30 },
-      // Slick + slightly bouncy: dropped objects glide down the back/tail
-      // slide instead of sticking on the slope.
-      restitution: 0.2,
-      friction: 0.04,
+      shape: def.shape,
+      restitution: def.restitution,
+      friction: def.friction,
       frictionAir: 0.005,
-      density: 0.0015,
+      density: def.density,
     }) as DroppedBody;
-    // Scale the visual to ~64px from the 96px native, matches the drawer thumbs.
-    body.setScale(0.7);
+    // Match drawer thumb size; setScale also scales the body, so the
+    // collider stays proportional to the rendered art.
+    body.setScale(VISUAL_SCALE);
     body.__dropId = id;
     this.dynamicBodies.add(body);
   }
