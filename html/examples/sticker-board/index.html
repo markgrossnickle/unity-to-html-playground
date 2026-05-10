@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Sticker Board — Unity → HTML Playground</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <a class="back" href="../../index.html">← back</a>
+    <div class="topbar">
+      <h1 class="title">Sticker Board</h1>
+      <span class="hint">
+        Drag from the drawer • Shift+drag to rotate • Wheel/pinch to scale •
+        Right-click/long-press to delete
+      </span>
+      <button id="btn-clear" type="button" class="topbtn">Clear</button>
+    </div>
+    <div id="game" class="game"></div>
+    <div id="drawer-host" class="drawer-host"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
