@@ -2,10 +2,11 @@
 // Phaser canvas) — easier to scroll horizontally on mobile and the drag
 // ghost can use ordinary CSS transforms.
 //
-// The drawer is a "source" of objects: each thumbnail is a permanent slot;
-// dragging out of a slot creates a *new* physics body in the scene; the
-// thumbnail itself stays put. After a slap, returning thumbnails are
-// tween-animated back into their original slot positions.
+// Each slot is a single-instance source: dragging vertically out of a slot
+// creates a physics body in the scene; the slot then dims out and stays
+// non-interactable until the live body returns (via tail slam or off-screen
+// exit). Horizontal pointer motion is interpreted as a drawer scroll and
+// does NOT spawn an object.
 
 export interface DrawerObject {
   /** Stable id used as the texture key in the scene + mapping back to slots. */
@@ -31,9 +32,13 @@ export interface DrawerHandle {
   rect(): DOMRect;
   /** Tween a thumbnail "ghost" from a screen point back to its drawer slot. */
   animateReturn(id: string, fromClientX: number, fromClientY: number): Promise<void>;
-  /** Dim (or restore) a slot. Dimmed slots are non-interactable until restored. */
+  /** Dim (or restore) a slot. Dimmed slots are non-interactable. */
   setSlotActive(id: string, active: boolean): void;
 }
+
+// Distance threshold (px) before we commit to either scrolling or dragging.
+// Picked to match the typical browser drag-vs-tap slop on touch screens.
+const INTENT_THRESHOLD = 8;
 
 export function initDrawer(
   parent: HTMLElement,
@@ -54,6 +59,7 @@ export function initDrawer(
   document.body.appendChild(ghost);
 
   const slotByid = new Map<string, HTMLElement>();
+  const urlById = new Map<string, string>();
 
   for (const obj of objects) {
     const slot = document.createElement("button");
@@ -70,8 +76,9 @@ export function initDrawer(
 
     scroller.appendChild(slot);
     slotByid.set(obj.id, slot);
+    urlById.set(obj.id, obj.url);
 
-    attachPointer(slot, obj, img.src);
+    attachPointer(slot, obj, obj.url);
   }
 
   parent.appendChild(root);
@@ -90,19 +97,54 @@ export function initDrawer(
         return;
       }
 
-      e.preventDefault();
-      slot.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const pointerId = e.pointerId;
+      let dragging = false;
+      let aborted = false;
 
-      ghost.style.backgroundImage = `url(${imgUrl})`;
-      ghost.style.display = "block";
-      moveGhost(e.clientX, e.clientY);
-
-      const onMove = (ev: PointerEvent) => moveGhost(ev.clientX, ev.clientY);
-      const onUp = (ev: PointerEvent) => {
+      const cleanup = () => {
         slot.removeEventListener("pointermove", onMove);
         slot.removeEventListener("pointerup", onUp);
-        slot.removeEventListener("pointercancel", onUp);
-        try { slot.releasePointerCapture(ev.pointerId); } catch {}
+        slot.removeEventListener("pointercancel", onCancel);
+      };
+
+      const beginDrag = (clientX: number, clientY: number) => {
+        dragging = true;
+        try { slot.setPointerCapture(pointerId); } catch { /* ignore */ }
+        ghost.style.backgroundImage = `url(${imgUrl})`;
+        ghost.style.display = "block";
+        moveGhost(clientX, clientY);
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        if (aborted) return;
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        const adx = Math.abs(dx);
+        const ady = Math.abs(dy);
+
+        if (!dragging) {
+          // Resolve intent at first motion exceeding the threshold.
+          // Horizontal dominates → user is scrolling the drawer; bail.
+          // Vertical dominates → start the drag.
+          if (adx > INTENT_THRESHOLD && adx > ady) {
+            aborted = true;
+            cleanup();
+            return;
+          }
+          if (ady > INTENT_THRESHOLD) {
+            beginDrag(ev.clientX, ev.clientY);
+          }
+          return;
+        }
+        moveGhost(ev.clientX, ev.clientY);
+      };
+
+      const onUp = (ev: PointerEvent) => {
+        cleanup();
+        try { slot.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+        if (!dragging) return; // tap or sub-threshold motion → no spawn
         ghost.style.display = "none";
 
         // If released over the drawer rect → no spawn.
@@ -114,9 +156,16 @@ export function initDrawer(
           onSpawn({ id: obj.id, clientX: ev.clientX, clientY: ev.clientY });
         }
       };
+
+      const onCancel = (ev: PointerEvent) => {
+        cleanup();
+        try { slot.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+        if (dragging) ghost.style.display = "none";
+      };
+
       slot.addEventListener("pointermove", onMove);
       slot.addEventListener("pointerup", onUp);
-      slot.addEventListener("pointercancel", onUp);
+      slot.addEventListener("pointercancel", onCancel);
     });
   }
 
@@ -128,21 +177,23 @@ export function initDrawer(
     const slot = slotByid.get(id);
     if (!slot) return;
     slot.classList.toggle("drawer-slot-dimmed", active);
-    if (!active) slot.classList.remove("drawer-slot-shake");
+    if (!active) {
+      slot.classList.remove("drawer-slot-shake");
+    }
   }
 
   return {
     element: root,
     rect: () => root.getBoundingClientRect(),
     animateReturn: (id, fromClientX, fromClientY) =>
-      animateReturn(slotByid, ghost, id, fromClientX, fromClientY),
+      animateReturn(slotByid, urlById, id, fromClientX, fromClientY),
     setSlotActive,
   };
 }
 
 function animateReturn(
   slotByid: Map<string, HTMLElement>,
-  ghost: HTMLElement,
+  urlById: Map<string, string>,
   id: string,
   fromClientX: number,
   fromClientY: number
@@ -153,10 +204,11 @@ function animateReturn(
       resolve();
       return;
     }
-    // Use a one-shot returning ghost so multiple returns can overlap.
+    // One-shot flier so multiple returns can overlap without sharing a node.
     const flier = document.createElement("div");
     flier.className = "drawer-ghost drawer-ghost-flier";
-    flier.style.backgroundImage = ghost.style.backgroundImage;
+    const url = urlById.get(id);
+    if (url) flier.style.backgroundImage = `url(${url})`;
     const startX = fromClientX - 32;
     const startY = fromClientY - 32;
     flier.style.transform = `translate(${startX}px, ${startY}px)`;

@@ -142,12 +142,21 @@ body {
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
   overflow-x: auto;
   overflow-y: hidden;
+  /* iOS momentum + soft horizontal snap so thumbnails settle nicely after
+     a fling without locking the user into rigid positions. */
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
   touch-action: pan-x;
-  scrollbar-width: thin;
+  /* Hide the scrollbar visually but keep it functional. */
+  scrollbar-width: none;
+}
+
+.drawer-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .drawer-slot {
-  flex: 0 0 auto;
+  flex: 0 0 88px;
   width: 88px;
   height: 88px;
   background: #ffffff;
@@ -158,23 +167,19 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  scroll-snap-align: center;
+  /* Allow horizontal pan to bubble up to the scroll container so the
+     drawer can scroll while still letting us detect vertical drags via
+     pointermove. */
+  touch-action: pan-x;
   transition: transform 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
-  touch-action: none;
-}
-
-.drawer-slot:hover {
-  border-color: var(--accent);
-  transform: translateY(-2px);
-}
-
-.drawer-slot:active {
-  cursor: grabbing;
 }
 
 .drawer-slot-dimmed {
   opacity: 0.5;
   border-style: dashed;
   cursor: not-allowed;
+  pointer-events: auto; /* keep pointerdown so the shake fires */
 }
 
 .drawer-slot-dimmed:hover {
@@ -197,6 +202,15 @@ body {
   40% { transform: translateX(4px); }
   60% { transform: translateX(-3px); }
   80% { transform: translateX(2px); }
+}
+
+.drawer-slot:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.drawer-slot:active {
+  cursor: grabbing;
 }
 
 .drawer-slot img {
