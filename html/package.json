@@ -11,6 +11,7 @@
     "gen-coloring-assets": "node scripts/generate-coloring-assets.mjs",
     "gen-dino-assets": "node scripts/generate-dino-assets.mjs",
     "gen-sticker-assets": "node scripts/generate-sticker-assets.mjs",
+    "gen-crane-assets": "node scripts/generate-crane-assets.mjs",
     "parse-line-art": "node scripts/parse-line-art.mjs",
     "gen-autoparsed-assets": "node scripts/generate-autoparsed-batch.mjs"
   },
