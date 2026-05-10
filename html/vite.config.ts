@@ -26,6 +26,8 @@ export default defineConfig({
           __dirname,
           "examples/coloring-book/index.html"
         ),
+        dinoDrop: resolve(__dirname, "examples/dino-drop/index.html"),
+        stickerBoard: resolve(__dirname, "examples/sticker-board/index.html"),
       },
     },
   },
