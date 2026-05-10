@@ -40,21 +40,41 @@ region fills. No backend, no flood-fill at runtime.
 
 ## Importing your own line art
 
-Tap **Import** in the toolbar and pick a black-on-white PNG or JPG (a
-photographed coloring-book page works fine — just make sure the lines are
-darker than the paper). The browser parser runs the same pipeline as the
-Node-side `scripts/parse-line-art.mjs`:
+Tap **Import** in the toolbar and pick any image. The parser auto-detects
+what kind of source you handed it:
 
-1. Downscale to ≤1200 px on the long edge so parsing fits in ~3s on
+- **Black-on-white line art** (PNG/JPG, photographed coloring-book page,
+  scanned drawing) — used verbatim. Threshold + erode + label.
+- **Color image** (photo, illustration, AI art, anything) —
+  auto-cartoonized into a clean black-on-white outline first, then fed
+  through the same labeling pipeline. The cartoonized outline is what gets
+  shown to the user as the lines layer; the original color pixels are not
+  preserved.
+
+Color detection samples ~10K pixels and looks at how far apart the R/G/B
+channels drift. A faintly-yellowed scan of a B&W page reads as B&W; an
+illustration with any saturation reads as color. Tunables for the detector
+live as `COLOR_TOLERANCE` / `COLOR_FRACTION` constants in
+`src/importParser.ts`.
+
+The browser parser runs the same labeling pipeline as the Node-side
+`scripts/parse-line-art.mjs`:
+
+1. Downscale to ≤2400 px on the long edge so parsing fits in ~3s on
    mid-range mobile.
-2. Grayscale → threshold (default 128).
-3. One erode pass to absorb antialiased outline edges.
-4. Iterative stack-based 4-connected flood-fill to label every fillable
+2. *(Color input only)* Cartoonize: Gaussian blur → Sobel gradient →
+   threshold → optional 1-pass thinning. See `src/cartoonize.ts`. Tunables
+   (`blurSigma`, `edgeThreshold`, `thinIterations`) live as defaults at the
+   top of that file — a future agent can expose them as UI sliders without
+   changing the algorithm.
+3. Grayscale → threshold (default 128).
+4. One erode pass to absorb antialiased outline edges.
+5. Iterative stack-based 4-connected flood-fill to label every fillable
    region.
-5. Drop regions smaller than 50 px (folded back into the outline so the
+6. Drop regions smaller than 50 px (folded back into the outline so the
    lines layer covers them).
-6. Pick the largest border-touching region as background (region id 255).
-7. Emit lines / labels canvases in the same RGBA format as the built-ins.
+7. Pick the largest border-touching region as background (region id 255).
+8. Emit lines / labels canvases in the same RGBA format as the built-ins.
 
 Imported pictures appear in the picker grid alongside the built-ins with
 an **Imported** badge and a small **×** delete button. They're saved to
@@ -62,10 +82,10 @@ an **Imported** badge and a small **×** delete button. They're saved to
 so they survive page refreshes. If `localStorage` fills up the import
 fails with a friendly message — remove an imported picture and try again.
 
-The parser is `src/importParser.ts`; the storage layer is in
-`src/pictures.ts`. Parsing is plain JS on the main thread (no Workers, no
-WASM, no extra deps) — for the target source sizes the difference isn't
-worth the complexity.
+The parser is `src/importParser.ts`; the cartoonize pass is
+`src/cartoonize.ts`; the storage layer is in `src/pictures.ts`. Parsing is
+plain JS on the main thread (no Workers, no WASM, no extra deps) — for the
+target source sizes the difference isn't worth the complexity.
 
 ## How the fill works
 
@@ -150,6 +170,7 @@ examples/coloring-book/
     ├── FillRenderer.ts    off-screen canvas writer (per-pixel pass)
     ├── pictures.ts        catalog of built-ins + localStorage-backed imports
     ├── importParser.ts    in-browser port of scripts/parse-line-art.mjs
+    ├── cartoonize.ts      color → B&W outline pre-pass for color imports
     ├── state.ts           selectedColor, fillMap, history, recentColors
     ├── events.ts          typed pub/sub between DOM controllers and the scene
     ├── palette.ts         right-rail swatches + recent row
