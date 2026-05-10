@@ -87,15 +87,13 @@ export class PadScene extends Phaser.Scene {
       pad.w = padW;
       pad.h = padH;
 
-      // Hit zone covers the full pad, centered on (0,0) in container space.
+      // Hit zone covers the full pad. Phaser hit areas are in object-local
+      // coords starting at the bounds' top-left — the origin (0.5, 0.5) is
+      // already handled by the input system, so the rectangle starts at (0,0)
+      // not (-w/2, -h/2). Doing both shifts the hit area up-left by half a pad.
       pad.zone.setSize(padW, padH);
       pad.zone.setPosition(0, 0);
-      pad.zone.input!.hitArea = new Phaser.Geom.Rectangle(
-        -padW / 2,
-        -padH / 2,
-        padW,
-        padH,
-      );
+      pad.zone.input!.hitArea = new Phaser.Geom.Rectangle(0, 0, padW, padH);
 
       drawPad(pad.bg, padW, padH, pad.def.color, false);
       drawPad(pad.bright, padW, padH, pad.def.bright, true);
