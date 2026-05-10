@@ -28,6 +28,10 @@ export default defineConfig({
         ),
         dinoDrop: resolve(__dirname, "examples/dino-drop/index.html"),
         stickerBoard: resolve(__dirname, "examples/sticker-board/index.html"),
+        wreckingCrane: resolve(
+          __dirname,
+          "examples/wrecking-crane/index.html"
+        ),
       },
     },
   },
