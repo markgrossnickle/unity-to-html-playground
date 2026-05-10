@@ -1,7 +1,15 @@
 import Phaser from "phaser";
 
 import { NUMBER_DEFS, ART_BOX, type Pt } from "./numberPaths";
+import { LETTER_DEFS, type Glyph } from "./letterPaths";
 import { playDing, playTaDa } from "./audio";
+
+export type TraceMode = "numbers" | "letters";
+
+const NUMBER_GLYPHS: ReadonlyArray<Glyph> = NUMBER_DEFS.map((d) => ({
+  label: String(d.digit),
+  strokes: d.strokes,
+}));
 
 // Tunables (all in screen pixels).
 const START_TOLERANCE = 44; // touch must land this close to an endpoint
@@ -16,7 +24,8 @@ const COLOR_GRID = 0xeaeef5;
 const COLOR_FLASH = [0x16c47a, 0xf2c641, 0xe85ca0, 0x1a72d6];
 
 export class TraceScene extends Phaser.Scene {
-  private numberIdx = 0;
+  private mode: TraceMode = "numbers";
+  private glyphIdx = 0;
   private strokeIdx = 0;
   private dir: 1 | -1 = 1;
   private head = 0; // furthest path-index the user has dragged to
@@ -77,18 +86,30 @@ export class TraceScene extends Phaser.Scene {
   // ── public API for toolbar buttons ────────────────────────────────────
 
   gotoPrev(): void {
-    this.numberIdx =
-      (this.numberIdx - 1 + NUMBER_DEFS.length) % NUMBER_DEFS.length;
-    this.resetForNewNumber();
+    const set = this.currentSet();
+    this.glyphIdx = (this.glyphIdx - 1 + set.length) % set.length;
+    this.resetForNewGlyph();
   }
 
   gotoNext(): void {
-    this.numberIdx = (this.numberIdx + 1) % NUMBER_DEFS.length;
-    this.resetForNewNumber();
+    const set = this.currentSet();
+    this.glyphIdx = (this.glyphIdx + 1) % set.length;
+    this.resetForNewGlyph();
   }
 
   restart(): void {
-    this.resetForNewNumber();
+    this.resetForNewGlyph();
+  }
+
+  setMode(mode: TraceMode): void {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    this.glyphIdx = 0;
+    this.resetForNewGlyph();
+  }
+
+  getMode(): TraceMode {
+    return this.mode;
   }
 
   // ── layout & coords ───────────────────────────────────────────────────
@@ -114,17 +135,21 @@ export class TraceScene extends Phaser.Scene {
     };
   }
 
-  private currentNumber() {
-    return NUMBER_DEFS[this.numberIdx]!;
+  private currentSet(): ReadonlyArray<Glyph> {
+    return this.mode === "numbers" ? NUMBER_GLYPHS : LETTER_DEFS;
+  }
+
+  private currentGlyph(): Glyph {
+    return this.currentSet()[this.glyphIdx]!;
   }
 
   private currentStroke(): Pt[] {
-    return this.currentNumber().strokes[this.strokeIdx]!;
+    return this.currentGlyph().strokes[this.strokeIdx]!;
   }
 
   // ── state transitions ─────────────────────────────────────────────────
 
-  private resetForNewNumber(): void {
+  private resetForNewGlyph(): void {
     this.strokeIdx = 0;
     this.head = 0;
     this.dir = 1;
@@ -145,9 +170,9 @@ export class TraceScene extends Phaser.Scene {
     this.tracing = false;
     this.tracingPointerId = null;
     playDing();
-    const num = this.currentNumber();
+    const g = this.currentGlyph();
     this.strokeIdx++;
-    if (this.strokeIdx >= num.strokes.length) {
+    if (this.strokeIdx >= g.strokes.length) {
       this.celebrate();
     } else {
       this.head = 0;
@@ -179,8 +204,9 @@ export class TraceScene extends Phaser.Scene {
     });
 
     this.advanceTimer = this.time.delayedCall(1500, () => {
-      this.numberIdx = (this.numberIdx + 1) % NUMBER_DEFS.length;
-      this.resetForNewNumber();
+      const set = this.currentSet();
+      this.glyphIdx = (this.glyphIdx + 1) % set.length;
+      this.resetForNewGlyph();
     });
     this.redraw();
   }
@@ -280,15 +306,16 @@ export class TraceScene extends Phaser.Scene {
   }
 
   private redraw(): void {
-    const num = this.currentNumber();
-    const isDone = this.strokeIdx >= num.strokes.length;
-    this.labelText.setText(`Trace the number ${num.digit}`);
+    const g = this.currentGlyph();
+    const isDone = this.strokeIdx >= g.strokes.length;
+    const kind = this.mode === "numbers" ? "number" : "letter";
+    this.labelText.setText(`Trace the ${kind} ${g.label}`);
 
-    // Dotted ghost over every stroke of the digit.
+    // Dotted ghost over every stroke of the glyph.
     this.gGhost.clear();
     this.gGhost.fillStyle(COLOR_GHOST, 1);
     const dotR = Math.max(3, 4 * this.pxScale * 0.9);
-    for (const stroke of num.strokes) {
+    for (const stroke of g.strokes) {
       for (const p of stroke) {
         const sp = this.toScreen(p);
         this.gGhost.fillCircle(sp.x, sp.y, dotR);
@@ -300,13 +327,13 @@ export class TraceScene extends Phaser.Scene {
     const thickness = Math.max(10, 14 * this.pxScale);
     const traceColor = isDone ? this.flashColor : COLOR_TRACE;
     this.gTrace.lineStyle(thickness, traceColor, 1);
-    const upTo = Math.min(this.strokeIdx, num.strokes.length);
+    const upTo = Math.min(this.strokeIdx, g.strokes.length);
     for (let s = 0; s < upTo; s++) {
-      const stroke = num.strokes[s]!;
+      const stroke = g.strokes[s]!;
       this.drawSolidPath(stroke, 0, stroke.length - 1);
     }
     if (!isDone && this.tracing) {
-      const stroke = num.strokes[this.strokeIdx]!;
+      const stroke = g.strokes[this.strokeIdx]!;
       if (this.dir === 1 && this.head > 0) {
         this.drawSolidPath(stroke, 0, this.head);
       } else if (this.dir === -1 && this.head < stroke.length - 1) {
@@ -317,7 +344,7 @@ export class TraceScene extends Phaser.Scene {
     // Endpoint markers for the current stroke (only when waiting for a start).
     this.gEnds.clear();
     if (!isDone && !this.celebrating && !this.tracing) {
-      const stroke = num.strokes[this.strokeIdx]!;
+      const stroke = g.strokes[this.strokeIdx]!;
       const endR = Math.max(12, 16 * this.pxScale);
       const first = stroke[0]!;
       const last = stroke[stroke.length - 1]!;

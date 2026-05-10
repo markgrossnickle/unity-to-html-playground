@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 
-import { TraceScene } from "./src/TraceScene";
+import { TraceScene, type TraceMode } from "./src/TraceScene";
 
 const gameHost = document.getElementById("game") as HTMLElement;
 
@@ -36,4 +36,27 @@ game.events.once(Phaser.Core.Events.READY, () => {
   prev?.addEventListener("click", () => scene.gotoPrev());
   next?.addEventListener("click", () => scene.gotoNext());
   restart?.addEventListener("click", () => scene.restart());
+
+  const modeBtns: Record<TraceMode, HTMLButtonElement | null> = {
+    numbers: document.getElementById(
+      "btn-mode-numbers"
+    ) as HTMLButtonElement | null,
+    letters: document.getElementById(
+      "btn-mode-letters"
+    ) as HTMLButtonElement | null,
+  };
+
+  const applyMode = (mode: TraceMode): void => {
+    scene.setMode(mode);
+    for (const m of ["numbers", "letters"] as const) {
+      const btn = modeBtns[m];
+      if (!btn) continue;
+      const active = m === mode;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", String(active));
+    }
+  };
+
+  modeBtns.numbers?.addEventListener("click", () => applyMode("numbers"));
+  modeBtns.letters?.addEventListener("click", () => applyMode("letters"));
 });

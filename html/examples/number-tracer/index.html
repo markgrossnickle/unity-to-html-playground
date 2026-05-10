@@ -12,6 +12,28 @@
   <body>
     <a class="back" href="../../index.html">← back</a>
     <div class="topbar">
+      <div
+        class="mode-toggle"
+        role="group"
+        aria-label="Tracing mode"
+      >
+        <button
+          id="btn-mode-numbers"
+          type="button"
+          class="modebtn is-active"
+          aria-pressed="true"
+        >
+          Numbers
+        </button>
+        <button
+          id="btn-mode-letters"
+          type="button"
+          class="modebtn"
+          aria-pressed="false"
+        >
+          Letters
+        </button>
+      </div>
       <button id="btn-prev" type="button" class="topbtn">◀ Prev</button>
       <div class="title-block">
         <h1 class="title">Number Tracer</h1>

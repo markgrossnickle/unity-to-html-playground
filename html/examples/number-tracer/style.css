@@ -112,6 +112,48 @@ body {
   transform: translateY(1px);
 }
 
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.modebtn {
+  min-width: 88px;
+  height: 44px;
+  padding: 0 16px;
+  background: transparent;
+  border: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.modebtn + .modebtn {
+  border-left: 1px solid var(--border);
+}
+
+.modebtn:hover {
+  color: var(--accent);
+}
+
+.modebtn.is-active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.modebtn.is-active:hover {
+  color: #ffffff;
+}
+
+.modebtn:active {
+  transform: translateY(1px);
+}
+
 @media (max-width: 640px) {
   .topbar {
     padding-left: 80px;
@@ -121,6 +163,11 @@ body {
     display: none;
   }
   .topbtn {
+    min-width: 0;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+  .modebtn {
     min-width: 0;
     padding: 0 10px;
     font-size: 13px;

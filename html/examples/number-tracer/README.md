@@ -1,21 +1,27 @@
 # Number Tracer
 
-Drag from the orange dot along a dotted outline to trace the digits 0–9. Each
-digit is made of one or more strokes (e.g. `0` is one continuous loop, `4` is
-two strokes). Finish one stroke to advance to the next; finish all strokes to
-celebrate and auto-advance to the next number.
+Drag from the orange dot along a dotted outline to trace digits `0–9` or
+uppercase letters `A–Z`. Each glyph is made of one or more strokes (e.g. `0`
+is one continuous loop, `4` is two strokes, `A` is three). Finish one stroke
+to advance to the next; finish all strokes to celebrate and auto-advance to
+the next glyph.
+
+A **Numbers / Letters** segmented toggle in the top toolbar switches modes.
+Switching resets to the first glyph in that mode (`0` for numbers, `A` for
+letters). Letter strokes follow Handwriting Without Tears (HWT) conventions.
 
 ## How it plays
 
-| Action               | Behaviour                                          |
-|----------------------|-----------------------------------------------------|
-| Touch an orange dot  | Locks the trace head onto that endpoint            |
-| Drag along the path  | Solid line fills in behind your finger             |
-| Stray off the path   | The head pauses — no reset, just come back on      |
-| Reach the far end    | "Ding", advance to the next stroke                 |
-| Finish every stroke  | "Ta-da", color cycle, "Yay!" — next number in 1.5s |
-| Top-bar **Prev/Next**| Jump between digits                                |
-| Top-bar **Restart**  | Clear the current digit and try again              |
+| Action                | Behaviour                                            |
+|-----------------------|------------------------------------------------------|
+| Touch an orange dot   | Locks the trace head onto that endpoint             |
+| Drag along the path   | Solid line fills in behind your finger              |
+| Stray off the path    | The head pauses — no reset, just come back on       |
+| Reach the far end     | "Ding", advance to the next stroke                  |
+| Finish every stroke   | "Ta-da", color cycle, "Yay!" — next glyph in 1.5s   |
+| Top-bar **Numbers/Letters** | Switch glyph set; resets to first glyph       |
+| Top-bar **Prev/Next** | Cycle within the active glyph set                   |
+| Top-bar **Restart**   | Clear the current glyph and try again               |
 
 ## Files
 
@@ -27,16 +33,19 @@ examples/number-tracer/
 └── src/
     ├── TraceScene.ts       layout, drag-trace logic, render layers
     ├── numberPaths.ts      hand-authored stroke paths for 0–9
+    ├── letterPaths.ts      hand-authored stroke paths for A–Z (HWT order)
     └── audio.ts            Web Audio "ding" + "ta-da" (lazy AudioContext)
 ```
 
 ## Stroke authoring
 
-Each digit's strokes live in `src/numberPaths.ts` as point arrays in
-**drawing order** — the natural way a kid is taught the digit (top-down for
-vertical strokes, left-to-right for horizontal). Strokes are built from line
-segments, cubic Béziers, and ellipse arcs, sampled densely (≈40–80 points each)
-so the per-frame proximity check feels smooth.
+Each glyph's strokes live in `src/numberPaths.ts` (0–9) or `src/letterPaths.ts`
+(A–Z) as point arrays in **drawing order** — the natural way a kid is taught
+the glyph (top-down for vertical strokes, left-to-right for horizontal). Letter
+stroke order follows Handwriting Without Tears (e.g. N is three strokes: left
+down, diagonal down, right *up*). Strokes are built from line segments, cubic
+Béziers, and ellipse arcs, sampled densely (≈30–60 points each) so the
+per-frame proximity check feels smooth.
 
 Coordinates are authored in a fixed 400×600 art box; the scene scales and
 centers them at runtime. No external asset files — everything draws from
