@@ -172,7 +172,9 @@ body {
   align-items: center;
   justify-content: center;
   transition: transform 0.12s ease, border-color 0.12s ease;
-  touch-action: none;
+  /* pan-x lets the browser handle horizontal swipes for drawer scrolling.
+     Vertical movement on a slot fires JS pointer events and triggers a drag. */
+  touch-action: pan-x;
 }
 
 .drawer-slot:hover {

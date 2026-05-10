@@ -55,23 +55,57 @@ export function initStickerDrawer(
 
     scroller.appendChild(slot);
 
+    // Intent detection: don't commit to drag mode until the user moves the
+    // pointer enough to show they want to drag (not horizontally scroll the
+    // drawer). Horizontal movement → let the browser scroll (pointercancel
+    // fires because of `touch-action: pan-x`). Vertical movement above a
+    // small threshold → commit to drag, capture the pointer, show the ghost.
+    const DRAG_INTENT_THRESHOLD = 8; // px
+
     slot.addEventListener("pointerdown", (e) => {
       if (e.button !== undefined && e.button !== 0) return;
-      e.preventDefault();
-      slot.setPointerCapture(e.pointerId);
 
-      ghost.style.backgroundImage = `url(${def.url})`;
-      ghost.style.display = "block";
-      moveGhost(e.clientX, e.clientY);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let dragging = false;
 
-      const onMove = (ev: PointerEvent) => moveGhost(ev.clientX, ev.clientY);
-      const onUp = (ev: PointerEvent) => {
+      const startDrag = (ev: PointerEvent) => {
+        dragging = true;
+        try { slot.setPointerCapture(ev.pointerId); } catch {}
+        ghost.style.backgroundImage = `url(${def.url})`;
+        ghost.style.display = "block";
+        moveGhost(ev.clientX, ev.clientY);
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        if (dragging) {
+          moveGhost(ev.clientX, ev.clientY);
+          return;
+        }
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        // Vertical-dominant movement past the threshold → drag.
+        if (Math.abs(dy) > DRAG_INTENT_THRESHOLD && Math.abs(dy) > Math.abs(dx)) {
+          startDrag(ev);
+        }
+        // Horizontal-dominant: do nothing — the browser is already scrolling
+        // (touch-action: pan-x) and we'll get pointercancel when it commits.
+      };
+
+      const cleanup = (ev: PointerEvent) => {
         slot.removeEventListener("pointermove", onMove);
         slot.removeEventListener("pointerup", onUp);
-        slot.removeEventListener("pointercancel", onUp);
-        try { slot.releasePointerCapture(ev.pointerId); } catch {}
-        ghost.style.display = "none";
+        slot.removeEventListener("pointercancel", onCancel);
+        if (dragging) {
+          try { slot.releasePointerCapture(ev.pointerId); } catch {}
+          ghost.style.display = "none";
+        }
+      };
 
+      const onUp = (ev: PointerEvent) => {
+        const wasDragging = dragging;
+        cleanup(ev);
+        if (!wasDragging) return;
         const r = root.getBoundingClientRect();
         const insideDrawer =
           ev.clientX >= r.left && ev.clientX <= r.right &&
@@ -80,9 +114,15 @@ export function initStickerDrawer(
           onSpawn({ id: def.id, clientX: ev.clientX, clientY: ev.clientY });
         }
       };
+
+      const onCancel = (ev: PointerEvent) => {
+        // Browser took over for horizontal panning. Abort silently.
+        cleanup(ev);
+      };
+
       slot.addEventListener("pointermove", onMove);
       slot.addEventListener("pointerup", onUp);
-      slot.addEventListener("pointercancel", onUp);
+      slot.addEventListener("pointercancel", onCancel);
     });
   }
 
