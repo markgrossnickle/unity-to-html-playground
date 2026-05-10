@@ -3,79 +3,90 @@
 // (threshold + erode → CC labeling) can swallow as if the user had handed us
 // hand-drawn line art.
 //
-// Three-stage philosophy: blur → quantize → merge-small → trace.
+// Pipeline: bilateral filter → Sobel gradient → non-max suppression → double
+// threshold + hysteresis → optional dilation. This is the classic Canny
+// edge-detection sequence with a bilateral pre-filter instead of a Gaussian.
+// It's what every "photo to pencil sketch" filter does, and there's a reason:
+// the parts work well together.
 //
-//   The earlier version (heavy blur → quantize 4 per channel → boundary trace)
-//   produced a noisy mess on portraits: a line on every wrinkle, every fabric
-//   crease, every minor shading band. The fix is layered:
+// WHY THIS PIPELINE (and what previous iterations got wrong)
 //
-//     1. HEAVIER BLUR (σ ≈ 6.0). Wash out skin texture, fabric weave, hair
-//        strands. The kernel half-width is 3σ ≈ 18 px — wide enough to
-//        dissolve a 30-px-wide wrinkle into the surrounding cheek.
+//   v2 (Sobel + threshold) produced dotty speckle: a pure Sobel response on
+//   photo input is a constellation of weak gradients across every shaded
+//   surface. Thresholding that gives you noise, not lines.
 //
-//     2. COARSER QUANTIZATION, ON LUMA. Convert to luma (Rec. 601) and bin
-//        into 3 levels. Throwing away chroma kills the "two same-luminance
-//        regions different hue" boundaries that draw lines around every
-//        reflection. Three luma bins maps roughly to shadow / mid / highlight
-//        — the regions a cartoonist would actually outline. (Fall-back: if
-//        useLuma is false, we keep the old per-channel RGB quantization for
-//        callers that need hue-driven boundaries.)
+//   v3 (Gaussian blur + luma posterize + region merge + boundary trace) was
+//   better but still drew lines on every wrinkle and shading band, while
+//   sometimes missing the silhouette entirely. The fundamental problem with
+//   Gaussian + posterize is that Gaussian blurs *everything* uniformly —
+//   including the strong edges we want to keep — and posterize quantizes
+//   brightness without regard for spatial context, so a smooth tonal ramp
+//   that crosses a bin boundary becomes a long sliver "edge."
 //
-//     3. MINIMUM-REGION-AREA FILTER. Connected-component label the quantized
-//        buffer (4-connected). Any component smaller than `minRegionFraction`
-//        of total area gets MERGED INTO ITS LARGEST 4-NEIGHBOR before tracing.
-//        This is the single biggest fix: a wrinkle that survives blur+quantize
-//        as a 50-pixel sliver gets absorbed into the surrounding face region
-//        and never produces an edge. Iterate until no small components remain
-//        (capped at 5 passes).
+//   This iteration (bilateral + Canny) addresses both halves of that:
 //
-//     4. BOUNDARY TRACE on the merged component-ID buffer (NOT against raw
-//        quantized colors). Single-side comparison (right and down only) so
-//        each boundary is drawn exactly once.
+//     1. BILATERAL FILTER replaces Gaussian. Bilateral smooths flat regions
+//        (skin, sky, fabric) while preserving strong edges (silhouette, eye
+//        boundary, mouth line). It does this by weighting each neighbor by
+//        BOTH spatial distance AND intensity similarity — neighbors whose
+//        intensity differs by more than ~rangeSigma contribute almost nothing
+//        to the average. The strong edges we want survive the smoothing pass;
+//        the texture we don't want gets washed out.
 //
-//     5. Optional 1-px morphological dilation, 4-connected, for a "drawn"
-//        2-px-wide stroke.
+//     2. CANNY replaces posterize-and-trace. Canny is a four-step recipe
+//        designed specifically to produce thin, connected outlines:
+//          a) Sobel gradient magnitude AND direction.
+//          b) Non-max suppression: at each pixel, keep magnitude only if it's
+//             the local max along the gradient direction. This thins ridges
+//             from "fat blob of high gradient" to "1 px line down the middle."
+//          c) Double threshold: pixels above highThreshold are STRONG, pixels
+//             above lowThreshold are WEAK. Strong always pass; weak pass only
+//             if 8-connected to a strong (hysteresis).
+//          d) Hysteresis: BFS from strong seeds through weak pixels.
+//        The result is connected lines with their endpoints intact and no
+//        floating noise speckles.
 //
-//     6. Output ImageData: edge → pure black opaque, non-edge → pure white opaque.
+// PERFORMANCE
 //
-// WHY this beats Sobel-then-threshold AND beats the old quantize-then-trace:
+//   Bilateral is O(N · windowArea). At spatialSigma=3 the window is 13×13 =
+//   169 ops per pixel; on a 2400×2400 source that's ~970M multiply-adds. In
+//   pure JS hot loops this is the most expensive step — expect 1–3 s on a
+//   modern phone. Acceptable for a one-time import. The spatial Gaussian
+//   weights are precomputed once and indexed in the inner loop, which is the
+//   main optimization that keeps this practical without going to a separable
+//   approximation or a grid-based bilateral. Canny itself is O(N).
 //
-//   Sobel responds to per-pixel intensity gradients. A smooth tonal ramp
-//   produces a sea of weak gradients; threshold them and you get a
-//   constellation of dots, not a line.
+// EDGE CASES NOTE
 //
-//   Quantize-then-trace WITHOUT the merge step still draws every quantization
-//   sliver — and at high sigma you get long, smooth slivers that look like
-//   lines. The merge pass is what turns "every wrinkle is a line" into "head
-//   silhouette + a few major features."
-//
-// Performance: separable Gaussian (two 1-D passes), typed-array hot loops,
-// flat allocations. At σ=6 the kernel is ~37 taps; the blur is the heaviest
-// step but still well under a second on modern phones for 2400×2400. The
-// connected-component + merge pass is a couple of linear sweeps. Target
-// budget: <2.5 s for a 2400×2400 source on Android Chrome (one-time cost at
-// import). If this gets blown, the right move is to downscale the source 2×
-// for the cartoonize pass — same lines layer, 4× cheaper.
+//   The default thresholds (low=30, high=80) are calibrated for typical
+//   photo input on the [0,255] gradient scale that 8-bit Sobel produces. They
+//   are intentionally permissive — the existing downstream pipeline
+//   (threshold + erode + CC labeling) tolerates a few extra edge pixels far
+//   better than it tolerates missing the silhouette.
 
 export interface CartoonizeOptions {
-  blurSigma?: number;          // gaussian sigma in pixels; default 6.0
-  quantizeLevels?: number;     // levels per channel (or luma bins if useLuma); default 3
-  useLuma?: boolean;           // quantize on luma instead of per-channel RGB; default true
-  minRegionFraction?: number;  // merge components smaller than this fraction of area; default 0.005 (0.5%)
-  dilate?: number;             // morphological dilation iterations (line thickness − 1); default 1
+  spatialSigma?: number;   // bilateral spatial Gaussian σ in px; default 3
+  rangeSigma?: number;     // bilateral intensity-range σ in [0,255]; default 25
+  lowThreshold?: number;   // Canny weak-edge threshold; default 30
+  highThreshold?: number;  // Canny strong-edge threshold; default 80
+  dilate?: number;         // post-Canny dilation iterations (line thickness − 1); default 1
 
-  // Deprecated. Old-pipeline knobs; accepted but ignored so callers that were
-  // typed against earlier shapes still compile.
+  // Deprecated / legacy. Earlier pipelines exposed these knobs; we accept them
+  // so callers typed against older shapes still compile, but they are no-ops.
+  blurSigma?: number;
+  quantizeLevels?: number;
+  useLuma?: boolean;
+  minRegionFraction?: number;
   edgeThreshold?: number;
   thinIterations?: number;
   invert?: boolean;
 }
 
 const DEFAULTS = {
-  blurSigma: 6.0,
-  quantizeLevels: 3,
-  useLuma: true,
-  minRegionFraction: 0.005,
+  spatialSigma: 3,
+  rangeSigma: 25,
+  lowThreshold: 30,
+  highThreshold: 80,
   dilate: 1,
 };
 
@@ -83,97 +94,59 @@ export function cartoonizeImageData(
   src: ImageData,
   opts: CartoonizeOptions = {}
 ): ImageData {
-  const blurSigma = opts.blurSigma ?? DEFAULTS.blurSigma;
-  const quantizeLevels = Math.max(2, opts.quantizeLevels ?? DEFAULTS.quantizeLevels);
-  const useLuma = opts.useLuma ?? DEFAULTS.useLuma;
-  const minRegionFraction = Math.max(0, opts.minRegionFraction ?? DEFAULTS.minRegionFraction);
+  const spatialSigma = Math.max(0.5, opts.spatialSigma ?? DEFAULTS.spatialSigma);
+  const rangeSigma = Math.max(1, opts.rangeSigma ?? DEFAULTS.rangeSigma);
+  const lowThreshold = Math.max(0, opts.lowThreshold ?? DEFAULTS.lowThreshold);
+  const highThreshold = Math.max(lowThreshold, opts.highThreshold ?? DEFAULTS.highThreshold);
   const dilate = Math.max(0, opts.dilate ?? DEFAULTS.dilate);
 
   const { width, height, data } = src;
   const N = width * height;
 
-  // Step 1 — blur. Luma path needs one plane; RGB path needs three.
-  // Working in float planes keeps the separable convolution clean.
-  let id: Uint16Array;
-  if (useLuma) {
-    const lumaPlane = new Float32Array(N);
-    for (let i = 0, j = 0; j < N; i += 4, j++) {
-      // Rec. 601 luma. Integer photometric weights would also work, but
-      // we already have floats from the blur path so the multiply is free.
-      lumaPlane[j] = 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!;
-    }
-    const lumaBlur = gaussianBlur(lumaPlane, width, height, blurSigma);
-
-    // Step 2 — quantize luma into N bins of equal width (256 / N).
-    // Storing the bin index gives us a single-int-compare boundary check.
-    const step = 256 / quantizeLevels;
-    id = new Uint16Array(N);
-    for (let p = 0; p < N; p++) {
-      let v = (lumaBlur[p]! / step) | 0;
-      if (v < 0) v = 0;
-      else if (v >= quantizeLevels) v = quantizeLevels - 1;
-      id[p] = v;
-    }
-  } else {
-    const rPlane = new Float32Array(N);
-    const gPlane = new Float32Array(N);
-    const bPlane = new Float32Array(N);
-    for (let i = 0, j = 0; j < N; i += 4, j++) {
-      rPlane[j] = data[i]!;
-      gPlane[j] = data[i + 1]!;
-      bPlane[j] = data[i + 2]!;
-    }
-    const rBlur = gaussianBlur(rPlane, width, height, blurSigma);
-    const gBlur = gaussianBlur(gPlane, width, height, blurSigma);
-    const bBlur = gaussianBlur(bPlane, width, height, blurSigma);
-
-    // Pack three 4-bit channel bins into one uint16 (works up to 16 levels).
-    const step = 256 / quantizeLevels;
-    id = new Uint16Array(N);
-    for (let p = 0; p < N; p++) {
-      let r = (rBlur[p]! / step) | 0;
-      let g = (gBlur[p]! / step) | 0;
-      let b = (bBlur[p]! / step) | 0;
-      if (r >= quantizeLevels) r = quantizeLevels - 1;
-      if (g >= quantizeLevels) g = quantizeLevels - 1;
-      if (b >= quantizeLevels) b = quantizeLevels - 1;
-      id[p] = (r << 8) | (g << 4) | b;
-    }
+  // Step 1 — RGBA → grayscale luma (Rec. 601). Canny is a luminance operator;
+  // we throw chroma away so two regions of equal brightness but different hue
+  // (a common source of spurious "edges" around saturated colors) don't draw
+  // a line. Working in Float32 keeps the bilateral and Sobel passes precise.
+  const gray = new Float32Array(N);
+  for (let i = 0, j = 0; j < N; i += 4, j++) {
+    gray[j] = 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!;
   }
 
-  // Step 3 — connected-component label, then merge components smaller than
-  // minSize into their largest neighbor. Iterate because merging can leave
-  // a chain of thin slivers that only collapses across multiple passes.
-  const minSize = Math.max(50, Math.floor(N * minRegionFraction));
-  const labels = mergeSmallRegions(id, width, height, minSize, 5);
+  // Step 2 — bilateral filter. Edge-preserving smoothing. See bilateralFilter
+  // for the per-pixel math; the takeaway is that flat regions get blurred
+  // away while strong edges stay sharp, which is exactly what Canny needs.
+  const smoothed = bilateralFilter(gray, width, height, spatialSigma, rangeSigma);
 
-  // Step 4 — boundary trace on the merged label buffer. Compare each pixel
-  // to its right and down neighbor only — single-side guarantees a 1-px line.
-  let edge: Uint8Array = new Uint8Array(N);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      const c = labels[i]!;
-      if (x + 1 < width && labels[i + 1]! !== c) {
-        edge[i] = 1;
-        continue;
-      }
-      if (y + 1 < height && labels[i + width]! !== c) {
-        edge[i] = 1;
-      }
-    }
-  }
+  // Step 3 — Sobel gradient. We need both magnitude (how strong is the edge?)
+  // and direction (which way does brightness change?) because non-max
+  // suppression compares each pixel to neighbors *along* the gradient
+  // direction, not to all 8 neighbors.
+  const { mag, dir } = sobelGradient(smoothed, width, height);
 
-  // Step 5 — optional 4-connected dilation for thicker strokes.
+  // Step 4 — non-max suppression. Thins gradient ridges to a single pixel
+  // wide by keeping a pixel's magnitude only if it's a local max along the
+  // gradient direction. Without this step a "strong edge" is a 3–5 px wide
+  // band of high gradient, which would hysterese into a fat blob.
+  const thinned = nonMaxSuppression(mag, dir, width, height);
+
+  // Step 5 — double threshold + hysteresis. Pixels above highThreshold seed
+  // the edge map; pixels above lowThreshold are pulled in only if they're
+  // connected (8-way) to a seed. This is what kills isolated high-frequency
+  // noise spots: a lone weak gradient with no strong neighbor disappears.
+  let edges = hysteresis(thinned, width, height, lowThreshold, highThreshold);
+
+  // Step 6 — optional dilation. Canny output is exactly 1 px wide, which can
+  // alias on screen. One round of 4-connected dilation gives a 2-px stroke
+  // that reads better and matches what hand-drawn line art tends to look like.
   for (let d = 0; d < dilate; d++) {
-    edge = dilate4(edge, width, height);
+    edges = dilate4(edges, width, height);
   }
 
-  // Step 6 — pack to RGBA. Edge → black, non-edge → white. Alpha 255.
+  // Step 7 — pack to RGBA. Edge → black, non-edge → white. Alpha 255.
   const out = new ImageData(width, height);
   const o = out.data;
   for (let p = 0; p < N; p++) {
-    const v = edge[p] === 1 ? 0 : 255;
+    const v = edges[p] === 1 ? 0 : 255;
     const i = p * 4;
     o[i] = v;
     o[i + 1] = v;
@@ -183,258 +156,245 @@ export function cartoonizeImageData(
   return out;
 }
 
-// 4-connected connected-component labeling using iterative stack flood fill.
-// `id` is the per-pixel quantized region ID; pixels share a component iff
-// they're 4-adjacent and have the same id. Returns a fresh Int32Array of
-// component labels (0..numComponents-1) and a parallel array of component
-// sizes. We use Int32 for labels because component count can exceed 65k on
-// a noisy 2400×2400 (worst-case ≈ N).
-function labelComponents(
-  id: Uint16Array,
-  width: number,
-  height: number
-): { labels: Int32Array; sizes: number[] } {
-  const N = width * height;
-  const labels = new Int32Array(N);
-  labels.fill(-1);
-  const sizes: number[] = [];
-  // Reusable stack for the flood fill. Worst case it grows to N, but in
-  // practice it tracks the perimeter of the current component.
-  const stack = new Int32Array(N);
-
-  let nextLabel = 0;
-  for (let seed = 0; seed < N; seed++) {
-    if (labels[seed] !== -1) continue;
-    const seedId = id[seed]!;
-    const label = nextLabel++;
-    let size = 0;
-    let sp = 0;
-    stack[sp++] = seed;
-    labels[seed] = label;
-    while (sp > 0) {
-      const p = stack[--sp]!;
-      size++;
-      const x = p % width;
-      const y = (p / width) | 0;
-      // West
-      if (x > 0) {
-        const q = p - 1;
-        if (labels[q] === -1 && id[q] === seedId) {
-          labels[q] = label;
-          stack[sp++] = q;
-        }
-      }
-      // East
-      if (x + 1 < width) {
-        const q = p + 1;
-        if (labels[q] === -1 && id[q] === seedId) {
-          labels[q] = label;
-          stack[sp++] = q;
-        }
-      }
-      // North
-      if (y > 0) {
-        const q = p - width;
-        if (labels[q] === -1 && id[q] === seedId) {
-          labels[q] = label;
-          stack[sp++] = q;
-        }
-      }
-      // South
-      if (y + 1 < height) {
-        const q = p + width;
-        if (labels[q] === -1 && id[q] === seedId) {
-          labels[q] = label;
-          stack[sp++] = q;
-        }
-      }
-    }
-    sizes.push(size);
-  }
-  return { labels, sizes };
-}
-
-// Iteratively merge any component smaller than minSize into the neighboring
-// component (4-connected) that shares the most border with it. After each
-// pass we relabel; we cap at maxPasses to avoid pathological inputs.
+// Bilateral filter on a single Float32 plane.
 //
-// Returns a label buffer where every label is "large enough" — that buffer is
-// what the boundary trace operates on. Crucially, the SAME quantized id can
-// span multiple merged labels (two cheek regions at id=mid stay separate if
-// they're not 4-connected through mid pixels), and DIFFERENT quantized ids
-// can collapse to the SAME label (a wrinkle sliver merges into the cheek).
-function mergeSmallRegions(
-  id: Uint16Array,
-  width: number,
-  height: number,
-  minSize: number,
-  maxPasses: number
-): Int32Array {
-  const N = width * height;
-  // Keep a writable copy of `id` so we can rewrite small components into the
-  // id of their dominant neighbor, then re-label on the next pass.
-  const work = new Uint16Array(N);
-  work.set(id);
-
-  for (let pass = 0; pass < maxPasses; pass++) {
-    const { labels, sizes } = labelComponents(work, width, height);
-    const numComponents = sizes.length;
-
-    // Bucket every pixel by label in one O(N) sweep, so each component's
-    // pixels are contiguous in `pixelOfLabel` from `labelStart[lab]` to
-    // `labelStart[lab+1]`. This is what keeps the per-pass work O(N) total
-    // even when there are thousands of small components — without it, each
-    // small component would re-scan the whole image.
-    const labelStart = new Int32Array(numComponents + 1);
-    for (let p = 0; p < N; p++) {
-      const idx = labels[p]! + 1;
-      labelStart[idx] = labelStart[idx]! + 1;
-    }
-    for (let i = 1; i <= numComponents; i++) {
-      labelStart[i] = labelStart[i]! + labelStart[i - 1]!;
-    }
-    const cursor = new Int32Array(numComponents);
-    const pixelOfLabel = new Int32Array(N);
-    for (let p = 0; p < N; p++) {
-      const lab = labels[p]!;
-      pixelOfLabel[labelStart[lab]! + cursor[lab]!] = p;
-      cursor[lab] = cursor[lab]! + 1;
-    }
-
-    // For each small component, count which neighboring component shares the
-    // longest 4-border with it. We use a single Map keyed by label and clear
-    // it between components.
-    const neighborCount = new Map<number, number>();
-    let merged = 0;
-
-    // Component label → its current quantized id. Read from any one pixel of
-    // the component; bucketing makes that the first entry in its run.
-    const labelToId = new Uint16Array(numComponents);
-    for (let lab = 0; lab < numComponents; lab++) {
-      labelToId[lab] = work[pixelOfLabel[labelStart[lab]!]!]!;
-    }
-
-    for (let lab = 0; lab < numComponents; lab++) {
-      if (sizes[lab]! >= minSize) continue;
-
-      neighborCount.clear();
-      const start = labelStart[lab]!;
-      const end = labelStart[lab + 1]!;
-      for (let k = start; k < end; k++) {
-        const p = pixelOfLabel[k]!;
-        const x = p % width;
-        const y = (p / width) | 0;
-        if (x > 0) {
-          const nl = labels[p - 1]!;
-          if (nl !== lab) neighborCount.set(nl, (neighborCount.get(nl) ?? 0) + 1);
-        }
-        if (x + 1 < width) {
-          const nl = labels[p + 1]!;
-          if (nl !== lab) neighborCount.set(nl, (neighborCount.get(nl) ?? 0) + 1);
-        }
-        if (y > 0) {
-          const nl = labels[p - width]!;
-          if (nl !== lab) neighborCount.set(nl, (neighborCount.get(nl) ?? 0) + 1);
-        }
-        if (y + 1 < height) {
-          const nl = labels[p + width]!;
-          if (nl !== lab) neighborCount.set(nl, (neighborCount.get(nl) ?? 0) + 1);
-        }
-      }
-
-      if (neighborCount.size === 0) continue; // image-wide single component
-
-      let bestLabel = -1;
-      let bestCount = -1;
-      for (const [k, v] of neighborCount) {
-        if (v > bestCount) {
-          bestCount = v;
-          bestLabel = k;
-        }
-      }
-      if (bestLabel < 0) continue;
-
-      const newId = labelToId[bestLabel]!;
-      // Rewrite all pixels of this small component to the winner's id.
-      // The next pass's labelComponents will see them as part of the
-      // neighbor's component (or, if the neighbor was itself small and got
-      // merged this pass too, a later pass keeps collapsing).
-      for (let k = start; k < end; k++) work[pixelOfLabel[k]!] = newId;
-      merged++;
-    }
-
-    if (merged === 0) {
-      return labels;
-    }
-  }
-
-  // Final relabel after the last merging pass.
-  return labelComponents(work, width, height).labels;
-}
-
-// Separable Gaussian blur over a Float32 plane. Two 1-D passes
-// (horizontal into a temp buffer, then vertical into the result) gives
-// O(N·k) instead of O(N·k²) for a k-tap kernel. Edges clamp.
+// For each output pixel we average a square window of neighbors, weighting
+// each neighbor by the product of two Gaussians:
 //
-// At very high sigma, three sequential blurs of σ' = σ/√3 give the same
-// result as one blur of σ (Gaussians are associative under convolution:
-// σ_total² = Σ σᵢ²) and are cheaper because each kernel is 1/√3 the width.
-// We don't bother for σ≤8 — the win is small and the code is simpler.
-function gaussianBlur(
+//   spatial weight = exp(-(dx² + dy²) / (2σ_s²))   — falls off with distance
+//   range weight   = exp(-ΔI² / (2σ_r²))           — falls off with intensity gap
+//
+// The range weight is the magic ingredient. A neighbor on the far side of a
+// strong edge has ΔI ≫ σ_r and contributes almost nothing to the average, so
+// the smoothed value at the current pixel reflects only neighbors on its own
+// side of the edge. Edges are preserved; flats are smoothed.
+//
+// Window half-size = 2·σ_s rather than the usual 3·σ_s. We're saving a chunk
+// of inner-loop work (a 13×13 kernel instead of 19×19) and the truncation
+// error from the tail of the spatial Gaussian is negligible — the range
+// weight typically dominates at the kernel edge anyway.
+//
+// Performance note: the spatial weights depend only on (dx, dy), not on the
+// image, so we precompute them once into a flat array. The range weight has
+// to be recomputed per pair (it depends on ΔI), but it's a single exp() per
+// neighbor with no allocation. Border handling: clamp to the inside of the
+// image (mirror / wrap would be slightly more correct but no human will see
+// the difference at the 6-pixel border).
+function bilateralFilter(
   src: Float32Array,
   width: number,
   height: number,
-  sigma: number
+  spatialSigma: number,
+  rangeSigma: number
 ): Float32Array {
-  const kernel = buildGaussianKernel(sigma);
-  const radius = (kernel.length - 1) / 2;
+  const halfSize = Math.max(1, Math.ceil(spatialSigma * 2));
+  const kernelSize = halfSize * 2 + 1;
 
-  const tmp = new Float32Array(src.length);
-  for (let y = 0; y < height; y++) {
-    const row = y * width;
-    for (let x = 0; x < width; x++) {
-      let sum = 0;
-      for (let k = -radius; k <= radius; k++) {
-        let xx = x + k;
-        if (xx < 0) xx = 0;
-        else if (xx >= width) xx = width - 1;
-        sum += src[row + xx]! * kernel[k + radius]!;
-      }
-      tmp[row + x] = sum;
+  // Precompute spatial Gaussian weights into a flat (kernelSize × kernelSize)
+  // array indexed as [(dy + halfSize) * kernelSize + (dx + halfSize)].
+  const spatialKernel = new Float32Array(kernelSize * kernelSize);
+  const inv2SpatialSigma2 = 1 / (2 * spatialSigma * spatialSigma);
+  for (let dy = -halfSize; dy <= halfSize; dy++) {
+    for (let dx = -halfSize; dx <= halfSize; dx++) {
+      spatialKernel[(dy + halfSize) * kernelSize + (dx + halfSize)] =
+        Math.exp(-(dx * dx + dy * dy) * inv2SpatialSigma2);
     }
   }
 
+  const inv2RangeSigma2 = 1 / (2 * rangeSigma * rangeSigma);
   const dst = new Float32Array(src.length);
+
   for (let y = 0; y < height; y++) {
+    const yMin = Math.max(0, y - halfSize);
+    const yMax = Math.min(height - 1, y + halfSize);
     for (let x = 0; x < width; x++) {
+      const center = src[y * width + x]!;
+      const xMin = Math.max(0, x - halfSize);
+      const xMax = Math.min(width - 1, x + halfSize);
       let sum = 0;
-      for (let k = -radius; k <= radius; k++) {
-        let yy = y + k;
-        if (yy < 0) yy = 0;
-        else if (yy >= height) yy = height - 1;
-        sum += tmp[yy * width + x]! * kernel[k + radius]!;
+      let weightSum = 0;
+      for (let yy = yMin; yy <= yMax; yy++) {
+        const dy = yy - y;
+        const krow = (dy + halfSize) * kernelSize + halfSize;
+        const srow = yy * width;
+        for (let xx = xMin; xx <= xMax; xx++) {
+          const dx = xx - x;
+          const neighbor = src[srow + xx]!;
+          const di = center - neighbor;
+          const w = spatialKernel[krow + dx]! * Math.exp(-di * di * inv2RangeSigma2);
+          sum += w * neighbor;
+          weightSum += w;
+        }
       }
-      dst[y * width + x] = sum;
+      dst[y * width + x] = sum / weightSum;
     }
   }
+
   return dst;
 }
 
-function buildGaussianKernel(sigma: number): Float32Array {
-  // Truncate at 3σ. For σ=6 that's a 37-tap kernel.
-  const radius = Math.max(1, Math.ceil(sigma * 3));
-  const size = radius * 2 + 1;
-  const k = new Float32Array(size);
-  const inv2sigma2 = 1 / (2 * sigma * sigma);
-  let sum = 0;
-  for (let i = 0; i < size; i++) {
-    const x = i - radius;
-    const v = Math.exp(-(x * x) * inv2sigma2);
-    k[i] = v;
-    sum += v;
+// Sobel 3×3 gradient. Returns magnitude and direction quantized to 4 bins:
+//
+//   bin 0 → gradient ≈ horizontal (E–W), edge runs vertically (N–S neighbors)
+//   bin 1 → gradient ≈ NE–SW          , edge runs NW–SE
+//   bin 2 → gradient ≈ vertical (N–S) , edge runs horizontally (E–W neighbors)
+//   bin 3 → gradient ≈ NW–SE          , edge runs NE–SW
+//
+// Why 4 bins and not 8: gradient direction has 180° symmetry (going from
+// dark→light is the same edge as light→dark), so we only care about the line
+// direction, which lives in [0°, 180°). Splitting into four 45° bins gives us
+// the coarse "which two neighbors do I compare to" answer that NMS needs.
+//
+// The 1-pixel border is left at zero — Sobel needs a 3×3 neighborhood and
+// downstream NMS skips the border anyway, so we don't lose anything.
+function sobelGradient(
+  src: Float32Array,
+  width: number,
+  height: number
+): { mag: Float32Array; dir: Uint8Array } {
+  const N = width * height;
+  const mag = new Float32Array(N);
+  const dir = new Uint8Array(N);
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      const nw = src[i - width - 1]!;
+      const n  = src[i - width]!;
+      const ne = src[i - width + 1]!;
+      const w  = src[i - 1]!;
+      const e  = src[i + 1]!;
+      const sw = src[i + width - 1]!;
+      const s  = src[i + width]!;
+      const se = src[i + width + 1]!;
+
+      // Sobel X: detects horizontal gradient (vertical edges).
+      const gx = -nw + ne - 2 * w + 2 * e - sw + se;
+      // Sobel Y: detects vertical gradient (horizontal edges).
+      const gy = -nw - 2 * n - ne + sw + 2 * s + se;
+
+      mag[i] = Math.sqrt(gx * gx + gy * gy);
+
+      // Quantize gradient angle to 4 bins. atan2 gives [-π, π]; we fold into
+      // [0, π) because direction is symmetric, then split into 45° buckets
+      // centered on 0°, 45°, 90°, 135°.
+      let a = Math.atan2(gy, gx);
+      if (a < 0) a += Math.PI;
+      const deg = a * (180 / Math.PI);
+      let bin: number;
+      if (deg < 22.5 || deg >= 157.5) bin = 0;        // ~0°  (horizontal gradient)
+      else if (deg < 67.5)            bin = 1;        // ~45°
+      else if (deg < 112.5)           bin = 2;        // ~90° (vertical gradient)
+      else                            bin = 3;        // ~135°
+      dir[i] = bin;
+    }
   }
-  for (let i = 0; i < size; i++) k[i] = k[i]! / sum;
-  return k;
+
+  return { mag, dir };
+}
+
+// Non-maximum suppression along the gradient direction.
+//
+// For each pixel, look at its two neighbors along the gradient direction (NOT
+// the edge direction) and keep this pixel's magnitude only if it's >= both.
+// That collapses a fat ridge of high gradient into a single-pixel-wide line
+// running perpendicular to the gradient.
+//
+// We use ≥ rather than > so that a perfectly flat ridge (two equal neighbors)
+// still survives. It produces 2-px-wide artifacts in rare edge cases but
+// avoids the much worse failure of erasing a clean straight line entirely.
+function nonMaxSuppression(
+  mag: Float32Array,
+  dir: Uint8Array,
+  width: number,
+  height: number
+): Float32Array {
+  const N = width * height;
+  const out = new Float32Array(N);
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      const m = mag[i]!;
+      if (m === 0) continue;
+      let n1 = 0, n2 = 0;
+      switch (dir[i]) {
+        case 0: // horizontal gradient → compare to W and E
+          n1 = mag[i - 1]!;
+          n2 = mag[i + 1]!;
+          break;
+        case 1: // NE-SW gradient → compare to NE and SW
+          n1 = mag[i - width + 1]!;
+          n2 = mag[i + width - 1]!;
+          break;
+        case 2: // vertical gradient → compare to N and S
+          n1 = mag[i - width]!;
+          n2 = mag[i + width]!;
+          break;
+        case 3: // NW-SE gradient → compare to NW and SE
+          n1 = mag[i - width - 1]!;
+          n2 = mag[i + width + 1]!;
+          break;
+      }
+      if (m >= n1 && m >= n2) out[i] = m;
+    }
+  }
+
+  return out;
+}
+
+// Double threshold + hysteresis. Two-pass:
+//   Pass 1: every pixel with magnitude ≥ highThreshold becomes a strong edge
+//           and gets pushed onto the BFS stack.
+//   Pass 2: BFS through 8-connected neighbors, promoting any unset pixel
+//           whose magnitude is ≥ lowThreshold. This is what propagates a
+//           confident edge along its weaker tail without admitting isolated
+//           weak gradients elsewhere.
+//
+// Output is a {0, 1} mask. The stack is a flat Int32Array sized to N — the
+// worst case is "every pixel is an edge," which is fine; in practice it
+// stays small because most pixels are below lowThreshold.
+function hysteresis(
+  mag: Float32Array,
+  width: number,
+  height: number,
+  low: number,
+  high: number
+): Uint8Array {
+  const N = width * height;
+  const out = new Uint8Array(N);
+  const stack = new Int32Array(N);
+  let sp = 0;
+
+  for (let i = 0; i < N; i++) {
+    if (mag[i]! >= high) {
+      out[i] = 1;
+      stack[sp++] = i;
+    }
+  }
+
+  while (sp > 0) {
+    const p = stack[--sp]!;
+    const x = p % width;
+    const y = (p / width) | 0;
+    const xMin = x > 0 ? -1 : 0;
+    const xMax = x + 1 < width ? 1 : 0;
+    const yMin = y > 0 ? -1 : 0;
+    const yMax = y + 1 < height ? 1 : 0;
+    for (let dy = yMin; dy <= yMax; dy++) {
+      const row = (y + dy) * width;
+      for (let dx = xMin; dx <= xMax; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const q = row + (x + dx);
+        if (out[q] === 0 && mag[q]! >= low) {
+          out[q] = 1;
+          stack[sp++] = q;
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 // 4-connected morphological dilation. Each output pixel is lit iff itself or
