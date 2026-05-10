@@ -27,6 +27,10 @@ export default defineConfig({
           "examples/coloring-book/index.html"
         ),
         dinoDrop: resolve(__dirname, "examples/dino-drop/index.html"),
+        numberTracer: resolve(
+          __dirname,
+          "examples/number-tracer/index.html"
+        ),
         soundPads: resolve(__dirname, "examples/sound-pads/index.html"),
         spaceDodge: resolve(__dirname, "examples/space-dodge/index.html"),
         stickerBoard: resolve(__dirname, "examples/sticker-board/index.html"),
