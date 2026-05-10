@@ -1,0 +1,106 @@
+:root {
+  --bg: #14131a;
+  --fg: #f3f4f8;
+  --muted: #a8adbd;
+  --accent: #ff8fc7;
+  --border: rgba(255, 255, 255, 0.12);
+  --topbar-h: 48px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  height: 100%;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.back {
+  position: fixed;
+  top: 12px;
+  left: 14px;
+  z-index: 30;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.back:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px 0 96px;
+  background: rgba(0, 0, 0, 0.35);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+  z-index: 20;
+}
+
+.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .hint {
+    font-size: 11px;
+  }
+}
+
+.game {
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg);
+  touch-action: none;
+}
+
+.game canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
