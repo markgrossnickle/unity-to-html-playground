@@ -1546,7 +1546,6 @@ const PICTURES = [
   ["flower", makeFlower()],
   ["wolf", makeWolf()],
   ["mermaid", makeMermaid()],
-  ["unicorn", makeUnicorn()],
 ];
 
 for (const [slug, { labels, lines }] of PICTURES) {

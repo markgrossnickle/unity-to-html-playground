@@ -25,8 +25,6 @@ import wolfLines from "../assets/wolf_lines.png?url";
 import wolfLabels from "../assets/wolf_labels.png?url";
 import mermaidLines from "../assets/mermaid_lines.png?url";
 import mermaidLabels from "../assets/mermaid_labels.png?url";
-import unicornLines from "../assets/unicorn_lines.png?url";
-import unicornLabels from "../assets/unicorn_labels.png?url";
 // Auto-parsed subjects — line-art PNG → parser → lines/labels pair.
 // Source PNGs live in ../source-art/, regenerate via `npm run gen-autoparsed-assets`.
 import butterflyLines from "../assets/butterfly_lines.png?url";
@@ -98,12 +96,6 @@ export const PICTURES: Picture[] = [
     title: "Mermaid",
     linesUrl: mermaidLines,
     labelsUrl: mermaidLabels,
-  },
-  {
-    slug: "unicorn",
-    title: "Unicorn",
-    linesUrl: unicornLines,
-    labelsUrl: unicornLabels,
   },
   {
     slug: "butterfly",
