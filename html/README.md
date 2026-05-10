@@ -39,6 +39,7 @@ html/
 │   ├── coloring-book/                tap-to-fill line-art pictures
 │   ├── dino-drop/                    Matter physics + stegosaurus silhouette
 │   ├── sound-pads/                   4×4 launchpad — Web Audio synth, multi-touch
+│   ├── space-dodge/                  vertical-scrolling asteroid dodger
 │   ├── sticker-board/                drag/rotate/scale stickers (localStorage)
 │   └── wrecking-crane/               Matter physics + draggable crane arm
 ├── scripts/
@@ -46,7 +47,8 @@ html/
 │   ├── generate-coloring-assets.mjs  regenerates coloring-book art
 │   ├── generate-dino-assets.mjs      regenerates the stegosaurus + drawer toys
 │   ├── generate-sticker-assets.mjs   regenerates the 12 cartoon stickers
-│   └── generate-crane-assets.mjs     regenerates the crane + house pieces
+│   ├── generate-crane-assets.mjs     regenerates the crane + house pieces
+│   └── generate-space-assets.mjs     regenerates the ship + asteroids + heart
 └── vite.config.ts                    multi-page entry table
 ```
 
@@ -69,6 +71,7 @@ npm run gen-coloring-assets  # coloring-book
 npm run gen-dino-assets      # dino-drop
 npm run gen-sticker-assets   # sticker-board
 npm run gen-crane-assets     # wrecking-crane
+npm run gen-space-assets     # space-dodge
 ```
 
 `gen-sample-assets` writes `examples/animation-playback/assets/{atlas.png,

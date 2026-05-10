@@ -28,6 +28,7 @@ export default defineConfig({
         ),
         dinoDrop: resolve(__dirname, "examples/dino-drop/index.html"),
         soundPads: resolve(__dirname, "examples/sound-pads/index.html"),
+        spaceDodge: resolve(__dirname, "examples/space-dodge/index.html"),
         stickerBoard: resolve(__dirname, "examples/sticker-board/index.html"),
         wreckingCrane: resolve(
           __dirname,
