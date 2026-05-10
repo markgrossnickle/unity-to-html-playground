@@ -1,12 +1,19 @@
-// Generates stegosaurus + drawer-object PNGs for examples/dino-drop.
+// Generates brontosaurus + drawer-object PNGs for examples/dino-drop.
+//
+// The brontosaurus is rendered as a back-hump-and-tail view: the dino is so
+// large that its head, neck, and front legs are off-screen to the LEFT. What
+// we see is the rear half — a smooth back hump rising near the left edge of
+// the canvas, then descending into a long sauropod tail that curves down and
+// to the RIGHT, forming a slide that ends at ground level.
 //
 // Output:
-//   examples/dino-drop/assets/stegosaurus.png   600x400, transparent bg
-//   examples/dino-drop/assets/<obj>.png         96x96 each, transparent bg
+//   examples/dino-drop/assets/brontosaurus-body.png   1200x500, transparent bg
+//   examples/dino-drop/assets/brontosaurus-tail.png   1200x500, transparent bg
+//   examples/dino-drop/assets/<obj>.png               96x96 each, transparent bg
 //
-// We draw with node-canvas so the curves come out smooth. Every shape uses a
-// dark outline + flat fill — the look is "cartoon coloring book," matching
-// the playground's existing aesthetic.
+// Both dino PNGs share art-space coordinates (origin top-left, x→right,
+// y→down). The tail-pivot in art-space is exported via dinoBody.ts and lines
+// up 1:1 between the two PNGs so the tail can rotate independently.
 
 import { createCanvas } from "canvas";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -20,49 +27,49 @@ mkdirSync(ASSETS, { recursive: true });
 
 // ---- shared palette -----------------------------------------------------
 
-const OUTLINE = "#2c2418";
-const SHADOW = "rgba(0,0,0,0.18)";
+const OUTLINE = "#2a2618";
+const SHADOW = "rgba(0,0,0,0.22)";
 
-// ---- stegosaurus --------------------------------------------------------
-//
-// The stegosaurus is rendered into TWO separate PNG layers so the scene can
-// rotate the tail independently for the slap animation:
-//   stegosaurus-body.png  — body + head + plates + legs + shadow (no tail)
-//   stegosaurus-tail.png  — just the tail, sized to the same 600x400 canvas
-//                           so its pivot point lines up 1:1 with the body.
-//
-// Both PNGs share art-space coordinates (origin top-left, x→right, y→down).
-// The tail-pivot in art-space is (~200, 195) — exported via dinoBody.ts.
+// Brontosaurus coloring: warm green-gray sauropod, lighter belly, darker
+// shaded leg for depth.
+const BRONTO_FILL = "#7a9268";
+const BRONTO_BELLY = "#a8bd92";
+const BRONTO_LEG_DARK = "#5e7152";
 
-const DINO_W = 600;
-const DINO_H = 400;
+// ---- brontosaurus -------------------------------------------------------
 
-function drawStegosaurusBody() {
+const DINO_W = 1200;
+const DINO_H = 500;
+
+function drawBrontoBody() {
   const cv = createCanvas(DINO_W, DINO_H);
   const ctx = cv.getContext("2d");
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
 
-  // Soft ground shadow under the belly.
+  // Soft ground shadow under the belly. Long horizontal stretch since the
+  // body is huge.
   ctx.fillStyle = SHADOW;
   ctx.beginPath();
-  ctx.ellipse(310, 372, 220, 14, 0, 0, Math.PI * 2);
+  ctx.ellipse(220, 478, 260, 18, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // legs first so the body fill covers the inside seams
-  drawLeg(ctx, 280, 268, 32, 88, "#5d8a42"); // back-left (darker)
-  drawLeg(ctx, 470, 266, 34, 92, "#5d8a42"); // back-right (darker)
-  drawLeg(ctx, 220, 270, 36, 90, "#6ea14f"); // front-left
-  drawLeg(ctx, 420, 268, 38, 96, "#6ea14f"); // front-right
+  // Back legs first (so the body fill covers the inside seams). The far leg
+  // is the dark shaded one; the near leg is body-colored.
+  drawLeg(ctx, 120, 310, 56, 180, BRONTO_LEG_DARK);
+  drawLeg(ctx, 320, 320, 60, 170, BRONTO_FILL);
 
   drawBody(ctx);
-  drawPlates(ctx);
-  drawHead(ctx);
+  drawBackDetail(ctx);
 
   return cv;
 }
 
-function drawStegosaurusTail() {
+function drawBrontoTail() {
   const cv = createCanvas(DINO_W, DINO_H);
   const ctx = cv.getContext("2d");
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   drawTail(ctx);
   return cv;
 }
@@ -70,210 +77,177 @@ function drawStegosaurusTail() {
 function drawLeg(ctx, cx, topY, w, h, fill) {
   ctx.fillStyle = fill;
   ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 6;
   ctx.beginPath();
-  // chunky stubby leg, slightly tapered
+  // Tree-trunk leg — slightly wider at the foot, tapered at the top.
   ctx.moveTo(cx - w / 2, topY);
   ctx.bezierCurveTo(
-    cx - w / 2 - 4, topY + h * 0.5,
-    cx - w / 2 - 2, topY + h,
-    cx - w / 2 + 4, topY + h
+    cx - w / 2 - 6, topY + h * 0.5,
+    cx - w / 2 - 8, topY + h * 0.92,
+    cx - w / 2 + 6, topY + h
   );
-  ctx.lineTo(cx + w / 2 - 4, topY + h);
+  ctx.lineTo(cx + w / 2 - 6, topY + h);
   ctx.bezierCurveTo(
-    cx + w / 2 + 2, topY + h,
-    cx + w / 2 + 4, topY + h * 0.5,
+    cx + w / 2 + 8, topY + h * 0.92,
+    cx + w / 2 + 6, topY + h * 0.5,
     cx + w / 2, topY
   );
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  // toes
-  ctx.fillStyle = "#3b2a18";
+  // Toes — three little dark nubs along the foot.
+  ctx.fillStyle = "#2c2010";
   for (let i = -1; i <= 1; i++) {
     ctx.beginPath();
-    ctx.arc(cx + i * (w / 3), topY + h - 3, 4, 0, Math.PI * 2);
+    ctx.arc(cx + i * (w / 3.2), topY + h - 4, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function bodyPath(ctx) {
+  // Single source of truth for the body silhouette so the fill, stroke, and
+  // belly-shading clip all line up.
+  ctx.beginPath();
+  // Top edge — body extends off the left into a tall slope (head/neck off),
+  // rises smoothly to the hump peak, then descends to the tail base.
+  ctx.moveTo(-30, 150);
+  ctx.bezierCurveTo(15, 110, 70, 86, 170, 78);    // up to hump peak
+  ctx.bezierCurveTo(260, 80, 360, 130, 460, 200);  // descend toward tail base
+  // Right side: smooth round-off into where the tail emerges (the tail PNG
+  // overlaps this seam so it stays hidden).
+  ctx.bezierCurveTo(480, 250, 460, 310, 410, 360);
+  ctx.bezierCurveTo(360, 400, 240, 425, 100, 420);
+  // Belly bottom: curves back to off-canvas-left.
+  ctx.bezierCurveTo(35, 418, -15, 400, -30, 360);
+  ctx.lineTo(-30, 150);
+  ctx.closePath();
+}
+
+function drawBody(ctx) {
+  // Solid body fill + outline.
+  ctx.fillStyle = BRONTO_FILL;
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 6;
+  bodyPath(ctx);
+  ctx.fill();
+  ctx.stroke();
+
+  // Lighter belly tone — clipped to the body so the shading never escapes
+  // the silhouette. Drawn as a wide flat ellipse along the lower body.
+  ctx.save();
+  bodyPath(ctx);
+  ctx.clip();
+  ctx.fillStyle = BRONTO_BELLY;
+  ctx.beginPath();
+  ctx.ellipse(180, 425, 320, 80, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBackDetail(ctx) {
+  // A subtle highlight along the top of the back — gives the hump a touch of
+  // shape so it doesn't read as a flat green blob.
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.beginPath();
+  ctx.moveTo(15, 130);
+  ctx.bezierCurveTo(70, 96, 170, 80, 270, 84);
+  ctx.bezierCurveTo(360, 92, 410, 130, 445, 175);
+  ctx.bezierCurveTo(410, 150, 320, 110, 230, 100);
+  ctx.bezierCurveTo(150, 100, 70, 116, 15, 145);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // A handful of small dark spots scattered along the back — sauropod skin
+  // texture hint.
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
+  const spots = [
+    [90, 108, 7],
+    [150, 92, 6],
+    [220, 88, 8],
+    [290, 98, 6],
+    [350, 124, 7],
+    [400, 158, 6],
+    [180, 180, 5],
+    [270, 210, 6],
+    [340, 230, 5],
+  ];
+  for (const [x, y, r] of spots) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 0.7, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 }
 
 function drawTail(ctx) {
-  // Thick tail curving up to the left. The tail base sits *inside* the body
-  // (x≈230) so the body fill covers the seam; only the visible portion
-  // (x<160 or so) reads as "tail."
+  // The tail is a long taper curving down-right from the body. The base
+  // (left end) tucks INTO the body fill (x≈460) so the seam is hidden when
+  // un-rotated. The tip lands near the bottom-right of the art canvas — in
+  // screen-space that point sits on the ground.
   ctx.save();
-  ctx.fillStyle = "#6ea14f";
+  ctx.fillStyle = BRONTO_FILL;
   ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 6;
   ctx.beginPath();
-  // top edge: from inside body, up over the tail's curve, to the tip
-  ctx.moveTo(240, 195);
-  ctx.bezierCurveTo(180, 175, 110, 160, 70, 130);
-  ctx.bezierCurveTo(50, 110, 36, 96, 30, 96);
-  // tip pinch
-  ctx.bezierCurveTo(22, 100, 26, 124, 44, 134);
-  // bottom edge back into the body
-  ctx.bezierCurveTo(78, 150, 130, 200, 200, 240);
-  ctx.bezierCurveTo(220, 248, 240, 245, 240, 230);
+  // Top edge (slide surface) — must read as a smooth, slidable curve.
+  ctx.moveTo(440, 180);
+  ctx.bezierCurveTo(540, 215, 660, 258, 780, 308);
+  ctx.bezierCurveTo(900, 358, 1020, 415, 1110, 455);
+  ctx.bezierCurveTo(1150, 472, 1175, 484, 1185, 492);
+  // Tail tip — small rounded curl.
+  ctx.bezierCurveTo(1196, 496, 1198, 506, 1184, 504);
+  // Bottom edge (back along the underside of the tail).
+  ctx.bezierCurveTo(1150, 502, 1100, 492, 1050, 480);
+  ctx.bezierCurveTo(940, 458, 800, 410, 660, 350);
+  ctx.bezierCurveTo(560, 308, 500, 280, 460, 252);
+  // Close back to the start, tucked into the body fill.
+  ctx.bezierCurveTo(440, 238, 425, 215, 440, 180);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  // belly tone on the underside of the tail
-  ctx.fillStyle = "rgba(0,0,0,0.08)";
+  // Underbelly shading on the tail's lower edge.
+  ctx.fillStyle = "rgba(0,0,0,0.10)";
   ctx.beginPath();
-  ctx.moveTo(60, 200);
-  ctx.bezierCurveTo(110, 215, 170, 235, 220, 240);
-  ctx.lineTo(220, 248);
-  ctx.bezierCurveTo(170, 245, 110, 225, 60, 210);
+  ctx.moveTo(460, 252);
+  ctx.bezierCurveTo(600, 308, 780, 380, 970, 445);
+  ctx.bezierCurveTo(1080, 475, 1140, 490, 1180, 502);
+  ctx.bezierCurveTo(1090, 488, 940, 456, 780, 396);
+  ctx.bezierCurveTo(640, 340, 530, 295, 460, 252);
   ctx.closePath();
   ctx.fill();
 
-  // a couple of small tail spikes (thagomizer hint) near the tip
-  ctx.fillStyle = "#e8d8a8";
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 3;
-  drawSpike(ctx, 44, 112, 8, 18, -0.3);
-  drawSpike(ctx, 60, 118, 7, 16, 0.1);
-  ctx.restore();
-}
-
-function drawSpike(ctx, x, y, halfW, h, rot) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rot);
+  // Highlight along the top of the tail — gives the slide a polished look.
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
   ctx.beginPath();
-  ctx.moveTo(-halfW, 0);
-  ctx.lineTo(0, -h);
-  ctx.lineTo(halfW, 0);
+  ctx.moveTo(450, 195);
+  ctx.bezierCurveTo(560, 230, 720, 285, 880, 350);
+  ctx.bezierCurveTo(1020, 408, 1130, 458, 1180, 488);
+  ctx.bezierCurveTo(1090, 452, 940, 388, 800, 322);
+  ctx.bezierCurveTo(660, 270, 540, 230, 450, 210);
   ctx.closePath();
   ctx.fill();
-  ctx.stroke();
-}
 
-function drawBody(ctx) {
-  ctx.fillStyle = "#7fb95a";
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  // chunky bean — bottom is the belly, top traces the back hump. Left edge
-  // extends to ~x=180 so the tail's right end is hidden under the fill.
-  ctx.moveTo(190, 220); // attaches to the tail's top edge on the left
-  ctx.bezierCurveTo(195, 175, 240, 145, 300, 135); // back rising
-  ctx.bezierCurveTo(360, 138, 410, 145, 450, 165); // back peak → shoulder
-  ctx.bezierCurveTo(490, 180, 520, 195, 540, 200); // neck approach
-  ctx.bezierCurveTo(548, 215, 540, 245, 510, 270); // shoulder down
-  ctx.bezierCurveTo(470, 290, 380, 300, 300, 300); // belly
-  ctx.bezierCurveTo(240, 300, 200, 285, 188, 265); // back-belly
-  ctx.bezierCurveTo(180, 250, 180, 235, 190, 220);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // belly shading
-  ctx.fillStyle = "#b8d68a";
-  ctx.beginPath();
-  ctx.moveTo(180, 280);
-  ctx.bezierCurveTo(240, 300, 380, 305, 470, 280);
-  ctx.bezierCurveTo(440, 305, 380, 312, 300, 312);
-  ctx.bezierCurveTo(220, 312, 200, 295, 180, 280);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawPlates(ctx) {
-  // Five back plates following the back curve. Authored in body-space so
-  // they line up with the back silhouette.
-  const plates = [
-    { x: 230, base: 152, w: 38, h: 46, lean: -0.18 },
-    { x: 280, base: 140, w: 44, h: 56, lean: -0.05 },
-    { x: 330, base: 138, w: 46, h: 60, lean: 0.0 },
-    { x: 380, base: 142, w: 42, h: 54, lean: 0.08 },
-    { x: 430, base: 152, w: 36, h: 44, lean: 0.18 },
+  // A few dark spots along the tail for skin texture continuity with the
+  // body.
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
+  const tailSpots = [
+    [540, 240, 6],
+    [660, 290, 5],
+    [780, 340, 5],
+    [900, 388, 4],
+    [1010, 428, 4],
+    [1100, 458, 3],
   ];
-  for (const p of plates) drawPlate(ctx, p);
-}
+  for (const [x, y, r] of tailSpots) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-function drawPlate(ctx, p) {
-  ctx.save();
-  ctx.translate(p.x, p.base);
-  ctx.rotate(p.lean);
-  ctx.fillStyle = "#f1d27a";
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(-p.w / 2, 4);
-  ctx.bezierCurveTo(-p.w / 2, -p.h * 0.4, -p.w * 0.15, -p.h, 0, -p.h);
-  ctx.bezierCurveTo(p.w * 0.15, -p.h, p.w / 2, -p.h * 0.4, p.w / 2, 4);
-  ctx.bezierCurveTo(p.w * 0.25, 12, -p.w * 0.25, 12, -p.w / 2, 4);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // inner shading on plate
-  ctx.fillStyle = "rgba(0,0,0,0.08)";
-  ctx.beginPath();
-  ctx.moveTo(-p.w / 2 + 4, 0);
-  ctx.bezierCurveTo(-p.w / 2 + 2, -p.h * 0.4, -p.w * 0.1, -p.h * 0.85, 0, -p.h * 0.9);
-  ctx.lineTo(0, 0);
-  ctx.closePath();
-  ctx.fill();
   ctx.restore();
-}
-
-function drawHead(ctx) {
-  // Small head with a snout extending right.
-  ctx.fillStyle = "#7fb95a";
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.moveTo(500, 200);
-  ctx.bezierCurveTo(525, 195, 555, 200, 568, 215); // top of snout
-  ctx.bezierCurveTo(580, 230, 575, 250, 555, 252); // snout tip
-  ctx.bezierCurveTo(540, 254, 525, 250, 515, 248); // chin underside
-  ctx.bezierCurveTo(500, 248, 488, 240, 488, 225);
-  ctx.bezierCurveTo(488, 215, 492, 205, 500, 200);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // eye
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(530, 218, 7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.fillStyle = OUTLINE;
-  ctx.beginPath();
-  ctx.arc(531, 219, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(530, 217, 1.4, 0, Math.PI * 2);
-  ctx.fill();
-
-  // smile
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.moveTo(530, 240);
-  ctx.bezierCurveTo(540, 246, 552, 246, 562, 240);
-  ctx.stroke();
-
-  // nostril
-  ctx.fillStyle = OUTLINE;
-  ctx.beginPath();
-  ctx.arc(566, 232, 1.8, 0, Math.PI * 2);
-  ctx.fill();
-
-  // little cheek blush
-  ctx.fillStyle = "rgba(220, 100, 110, 0.35)";
-  ctx.beginPath();
-  ctx.arc(515, 235, 6, 0, Math.PI * 2);
-  ctx.fill();
 }
 
 // ---- drawer objects -----------------------------------------------------
@@ -616,8 +590,8 @@ function writePng(cv, name) {
   writeFileSync(resolve(ASSETS, name), cv.toBuffer("image/png"));
 }
 
-writePng(drawStegosaurusBody(), "stegosaurus-body.png");
-writePng(drawStegosaurusTail(), "stegosaurus-tail.png");
+writePng(drawBrontoBody(), "brontosaurus-body.png");
+writePng(drawBrontoTail(), "brontosaurus-tail.png");
 
 const objects = {
   ball,
@@ -635,5 +609,5 @@ for (const [name, fn] of Object.entries(objects)) {
 }
 
 console.log(
-  `wrote stegosaurus-body.png + stegosaurus-tail.png + ${Object.keys(objects).length} objects to ${ASSETS}`
+  `wrote brontosaurus-body.png + brontosaurus-tail.png + ${Object.keys(objects).length} objects to ${ASSETS}`
 );

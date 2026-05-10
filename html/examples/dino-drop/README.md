@@ -1,26 +1,41 @@
 # Dino Drop
 
-A Phaser + **Matter.js** physics playground. Drag toys from the bottom drawer
-onto a side-view stegosaurus and watch them bounce off the back, slide down
-the curved tail, and pile up on the ground. Tap the dino to slap them all
-back into the drawer.
+A Phaser + **Matter.js** physics playground. The view is the rear half of
+an enormous brontosaurus — its head and neck are off-screen to the left,
+so all you see is the back hump rising near the left edge and the long
+sauropod tail curving down to the ground on the right. The tail forms a
+slide. Drag toys from the bottom drawer onto the dino and watch them
+slide down the back, ride the tail, and pile up on the ground. Tap the
+back hump to slap them all back into the drawer.
 
 ## What this exercises
 
 - **Phaser.Physics.Matter** — Arcade can't represent the curved spine.
-  We trace the dino's top contour (head brow → back hump → tail tip) as a
-  chain of thin rotated static rectangles in `src/dinoBody.ts`, plus a
-  ground rectangle and side walls.
+  We trace the dino's top contour (off-screen-left → back hump → tail
+  tip on the ground) as a chain of thin rotated static rectangles in
+  `src/dinoBody.ts`, plus a ground rectangle and side walls. The static
+  colliders use very low friction (`0.02`) so dropped objects glide all
+  the way down the slide instead of sticking.
 - **DOM-side drag from a thumbnail drawer.** The drawer is plain HTML for
   ergonomics on mobile (horizontal scroll, native pointer capture). Each
   drawer slot is a permanent "source"; pointerdown spawns a floating ghost,
   pointerup spawns a Matter body in the canvas (or cancels if dropped over
   the drawer).
-- **Tail slap** — tapping the dino body fires a 200 ms tween on the tail
-  sprite (rotates the tip up sharply, then back) AND applies an impulse to
-  every dynamic body in the scene. Each launched body is flagged for
-  return; when it leaves the canvas (or after 600 ms), the body is
-  destroyed and a return-ghost tweens back into its drawer slot.
+- **Tail slap** — tapping the dino's back hump fires a 200 ms tween on
+  the tail sprite (rotates the tip up sharply, then back to its rest
+  slide pose) AND applies an impulse to every dynamic body in the scene.
+  Each launched body is flagged for return; when it leaves the canvas
+  (or after 600 ms), the body is destroyed and a return-ghost tweens
+  back into its drawer slot.
+
+## Layout
+
+The brontosaurus art is authored at 1200×500 with the tail tip placed
+near the bottom-right corner of the art-space. The scene scales the
+sprite to fit the canvas width and bottom-anchors it so the tail tip
+always lands on the ground at the right while the body's visible left
+edge sits at the left of the canvas (the head/neck implicitly continues
+off-screen further left).
 
 ## Files
 
@@ -42,6 +57,6 @@ examples/dino-drop/
 npm run gen-dino-assets
 ```
 
-This rebuilds the stegosaurus (split into body + tail layers so the slap
-can rotate just the tail) and the eight drawer-object thumbnails. All art
-is drawn programmatically with `node-canvas`.
+This rebuilds the brontosaurus (split into body + tail layers so the
+slap can rotate just the tail) and the eight drawer-object thumbnails.
+All art is drawn programmatically with `node-canvas`.

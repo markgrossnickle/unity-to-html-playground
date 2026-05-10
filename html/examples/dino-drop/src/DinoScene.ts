@@ -1,8 +1,8 @@
 import Phaser from "phaser";
 import { DINO_SILHOUETTE } from "./dinoBody";
 
-import dinoBodyUrl from "../assets/stegosaurus-body.png?url";
-import dinoTailUrl from "../assets/stegosaurus-tail.png?url";
+import dinoBodyUrl from "../assets/brontosaurus-body.png?url";
+import dinoTailUrl from "../assets/brontosaurus-tail.png?url";
 import ballUrl from "../assets/ball.png?url";
 import blockUrl from "../assets/block.png?url";
 import triangleUrl from "../assets/triangle.png?url";
@@ -114,11 +114,13 @@ export class DinoScene extends Phaser.Scene {
     const w = cam.width;
     const h = cam.height;
 
-    // Scale the dino so it occupies a comfortable chunk of the lower-left.
-    // Cap so that on huge screens it doesn't dominate and on tiny screens
-    // there's still room to drop objects above it.
-    const targetH = Phaser.Math.Clamp(h * 0.55, 180, 360);
-    this.dinoScale = targetH / DINO_SILHOUETTE.height;
+    // The brontosaurus is sized for a back-hump-and-tail-slide view: head
+    // and neck disappear off the LEFT edge, tail tip lands on the ground
+    // at the right. The silhouette is authored so its visible left edge is
+    // at art-x=0 and the tail tip is near (artW, artH); fit-by-width
+    // therefore positions everything correctly across all common viewport
+    // widths without needing per-axis hacks.
+    this.dinoScale = w / DINO_SILHOUETTE.width;
     this.dinoOriginX = 0;
     this.dinoOriginY = h - DINO_SILHOUETTE.height * this.dinoScale;
 
@@ -185,9 +187,12 @@ export class DinoScene extends Phaser.Scene {
         {
           isStatic: true,
           angle,
-          friction: 0.18,
-          frictionStatic: 0.2,
-          restitution: 0.15,
+          // Low friction so dropped objects roll/slide down the back hump
+          // and along the tail-slide rather than catching at each plank
+          // junction.
+          friction: 0.02,
+          frictionStatic: 0.02,
+          restitution: 0.1,
           label: i >= DINO_SILHOUETTE.tailStart - 1 ? "dino-tail" : "dino-back",
         }
       );
@@ -214,8 +219,10 @@ export class DinoScene extends Phaser.Scene {
     const tex = `obj-${id}`;
     const body = this.matter.add.image(x, y, tex, undefined, {
       shape: { type: "circle", radius: 30 },
-      restitution: 0.4,
-      friction: 0.18,
+      // Slick + slightly bouncy: dropped objects glide down the back/tail
+      // slide instead of sticking on the slope.
+      restitution: 0.2,
+      friction: 0.04,
       frictionAir: 0.005,
       density: 0.0015,
     }) as DroppedBody;
