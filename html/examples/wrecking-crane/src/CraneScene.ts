@@ -22,7 +22,10 @@ export const REF_W = 1600;
 export const REF_H = 900;
 
 const GROUND_Y = 820;
-const TOWER_X = 220;
+// TOWER_X moved closer to the house at HX=1320 so the ball can actually
+// reach. With ARM_LEN=420 the tip reaches ~1120 horizontal, and with the
+// CHAIN_LEN=380 ball swing the ball can sweep into the house at HX=1320.
+const TOWER_X = 700;
 const PIVOT_Y = 240;
 const ARM_LEN = 420; // distance from pivot to the tip-anchor in world units
 const CHAIN_LEN = 380;
@@ -57,6 +60,11 @@ export class CraneScene extends Phaser.Scene {
   // Arm orientation — controlled directly (not by physics).
   private armAngle = ARM_REST_ANGLE;
   private dragging = false;
+  // Direct-grab on the ball — when true, the ball follows the pointer and
+  // the arm angle re-derives from the ball position so the chain doesn't
+  // visually disconnect.
+  private draggingBall = false;
+  private prevBallPos = { x: 0, y: 0 };
   // For computing flick velocity at release.
   private prevArmAngle = ARM_REST_ANGLE;
   private armAngularVelocity = 0;
@@ -207,12 +215,33 @@ export class CraneScene extends Phaser.Scene {
   }
 
   private onPointerDown(p: Phaser.Input.Pointer): void {
+    // Ball grab takes priority — if the finger lands near the wrecking ball,
+    // the user is grabbing the ball directly, not the arm.
+    const b = this.ball.body as MatterJS.BodyType;
+    const distBall = Math.hypot(p.worldX - b.position.x, p.worldY - b.position.y);
+    if (distBall < BALL_RADIUS + 24) {
+      this.draggingBall = true;
+      this.prevBallPos = { x: b.position.x, y: b.position.y };
+      return;
+    }
     if (this.pointerNearArm(p.worldX, p.worldY)) {
       this.dragging = true;
     }
   }
 
   private onPointerMove(p: Phaser.Input.Pointer): void {
+    if (this.draggingBall) {
+      const b = this.ball.body as MatterJS.BodyType;
+      this.prevBallPos = { x: b.position.x, y: b.position.y };
+      // Teleport the ball to the pointer; zero the velocity each frame so
+      // gravity doesn't fight the drag. The constraint between the arm
+      // anchor and the ball still applies — but with the ball pinned to the
+      // pointer, the constraint instead pulls the arm toward the ball,
+      // which we re-derive in the update tick.
+      this.matter.body.setPosition(b, { x: p.worldX, y: p.worldY }, false);
+      this.matter.body.setVelocity(b, { x: 0, y: 0 });
+      return;
+    }
     if (!this.dragging) return;
     const dx = p.worldX - TOWER_X;
     const dy = p.worldY - PIVOT_Y;
@@ -225,7 +254,17 @@ export class CraneScene extends Phaser.Scene {
     this.armAngle = angle;
   }
 
-  private onPointerUp(): void {
+  private onPointerUp(p: Phaser.Input.Pointer): void {
+    if (this.draggingBall) {
+      this.draggingBall = false;
+      // Impart the drag's instantaneous velocity to the ball on release so
+      // a flick-throw flings naturally. delta seconds ≈ 1/60.
+      const b = this.ball.body as MatterJS.BodyType;
+      const vx = (p.worldX - this.prevBallPos.x) * 30;
+      const vy = (p.worldY - this.prevBallPos.y) * 30;
+      this.matter.body.setVelocity(b, { x: vx, y: vy });
+      return;
+    }
     this.dragging = false;
     // On release, apply the arm's angular velocity to the ball as a tangential
     // impulse so flick-release feels satisfying.
