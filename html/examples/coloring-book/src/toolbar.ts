@@ -36,7 +36,12 @@ async function runImport(file: File): Promise<void> {
   // Yield to the browser so the overlay paints before the (CPU-heavy) parse.
   await new Promise((r) => requestAnimationFrame(r));
   try {
-    const parsed = await parseImage(file);
+    const parsed = await parseImage(file, {
+      onProgress: (stage) => {
+        if (stage === "cartoonize") setOverlayText("Detecting outlines…");
+        else if (stage === "label") setOverlayText("Parsing regions…");
+      },
+    });
     const entry = addImportedPicture({
       name: parsed.name,
       linesPng: parsed.linesPng,
@@ -59,9 +64,13 @@ async function runImport(file: File): Promise<void> {
 function showOverlay(text: string): void {
   const overlay = document.getElementById("import-overlay");
   if (!overlay) return;
+  setOverlayText(text);
+  overlay.hidden = false;
+}
+
+function setOverlayText(text: string): void {
   const label = document.getElementById("import-overlay-text");
   if (label) label.textContent = text;
-  overlay.hidden = false;
 }
 
 function hideOverlay(): void {

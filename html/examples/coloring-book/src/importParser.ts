@@ -9,16 +9,20 @@
 //     a typed-array stack is bounded and ~as fast as the union-find pass.
 //   - Optionally downscales large source images to keep parsing under ~3s on
 //     mobile (Android Chrome on a mid-range phone is the target).
-//   - The visible LINES layer is the user's ORIGINAL image, not transformed.
-//     The runtime composites it on top of the fill canvas with multiply blend
-//     mode, so the user's drawing is preserved pixel-for-pixel and the white
-//     interior areas show through whatever color the user paints behind them.
-//     Threshold + erode are still used for the LABELS layer where we need a
+//   - For B&W input the visible LINES layer is the user's ORIGINAL image,
+//     not transformed. The runtime composites it on top of the fill canvas
+//     with multiply blend mode, so the user's drawing is preserved
+//     pixel-for-pixel. For COLOR input we cartoonize first (see cartoonize.ts)
+//     and use that black-on-white outline as both the visible lines layer
+//     AND the input to the labels mask.
+//   - Threshold + erode are still used for the LABELS layer where we need a
 //     binary mask, but they never touch what the user actually sees.
 //
 // Output is a pair of canvases that match the runtime's expected format:
-//   lines:  the original source image (unmodified, just resized if huge).
+//   lines:  the (possibly cartoonized) outline image.
 //   labels: RGBA, R=region id (1..255), alpha=255 inside a region, 0 outside.
+
+import { cartoonizeImageData } from "./cartoonize";
 
 const BACKGROUND_ID = 255;
 const MAX_REGION_ID = 254;
@@ -28,7 +32,12 @@ export interface ParseOptions {
   minRegion?: number;
   erode?: number;
   maxDim?: number;
+  // Optional progress hook so the toolbar overlay can swap text between the
+  // (slow) cartoonize pass and the labeling pass on color inputs.
+  onProgress?: (stage: ParseStage) => void;
 }
+
+export type ParseStage = "cartoonize" | "label";
 
 export interface ParsedPicture {
   name: string;
@@ -62,7 +71,22 @@ export async function parseImage(
   };
 
   const img = await loadImage(file);
-  const { width, height, gray, sourcePng } = drawToGrayscale(img, settings.maxDim);
+  const drawn = drawSource(img, settings.maxDim);
+  const { width, height, sourceImageData } = drawn;
+  let { gray, sourcePng } = drawn;
+
+  // Color path: cartoonize the source into a B&W outline, then feed THAT into
+  // the rest of the pipeline. The visible lines layer becomes the cartoon, so
+  // the user sees the same outline that drives the labels mask.
+  if (isColorImage(sourceImageData.data)) {
+    opts.onProgress?.("cartoonize");
+    // Yield once so the overlay text update repaints before the heavy passes.
+    await new Promise((r) => requestAnimationFrame(r));
+    const cartoon = cartoonizeImageData(sourceImageData);
+    sourcePng = imageDataToDataURL(cartoon);
+    gray = imageDataToGrayscale(cartoon);
+  }
+  opts.onProgress?.("label");
 
   let mask = threshold(gray, settings.threshold);
   for (let i = 0; i < settings.erode; i++) mask = erodeOnce(mask, width, height);
@@ -109,10 +133,15 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-function drawToGrayscale(
-  img: HTMLImageElement,
-  maxDim: number
-): { width: number; height: number; gray: Uint8Array; sourcePng: string } {
+interface DrawnSource {
+  width: number;
+  height: number;
+  gray: Uint8Array;
+  sourceImageData: ImageData;
+  sourcePng: string;
+}
+
+function drawSource(img: HTMLImageElement, maxDim: number): DrawnSource {
   let w = img.naturalWidth || img.width;
   let h = img.naturalHeight || img.height;
   if (w === 0 || h === 0) throw new Error("image has zero dimensions");
@@ -137,18 +166,70 @@ function drawToGrayscale(
   ctx.drawImage(img, 0, 0, w, h);
 
   // Snapshot the source-on-white canvas BEFORE we read pixel data. This is
-  // the visible lines layer the runtime composites with multiply blending —
-  // we want the user's exact pixels here, including any antialiased edges.
+  // the visible lines layer for B&W input the runtime composites with multiply
+  // blending — we want the user's exact pixels here, including any antialiased
+  // edges. (Color input throws this away in favor of the cartoonized output.)
   const sourcePng = c.toDataURL("image/png");
 
-  const data = ctx.getImageData(0, 0, w, h).data;
+  const sourceImageData = ctx.getImageData(0, 0, w, h);
+  const rgba = sourceImageData.data;
   const gray = new Uint8Array(w * h);
   // Rec. 601 luma. Matches sharp's default grayscale, close enough for the
   // threshold step that follows.
-  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    gray[j] = (data[i]! * 299 + data[i + 1]! * 587 + data[i + 2]! * 114) / 1000;
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
+    gray[j] = (rgba[i]! * 299 + rgba[i + 1]! * 587 + rgba[i + 2]! * 114) / 1000;
   }
-  return { width: w, height: h, gray, sourcePng };
+  return { width: w, height: h, gray, sourceImageData, sourcePng };
+}
+
+// Detect whether the source has meaningful color content. We sample every
+// Nth pixel (cap ~10K samples) and look at max|R-G|, |G-B|, |R-B|. Any
+// value above COLOR_TOLERANCE counts; if that's true for >COLOR_FRACTION of
+// samples, it's color. The thresholds are loose enough that JPEG chroma
+// noise on a B&W scan (subtle yellow-blue speckle) doesn't trip the path,
+// but a properly colored illustration trips it instantly.
+const COLOR_TOLERANCE = 12;
+const COLOR_FRACTION = 0.01;
+const COLOR_SAMPLE_TARGET = 10_000;
+
+export function isColorImage(rgba: Uint8ClampedArray): boolean {
+  const pixelCount = rgba.length / 4;
+  if (pixelCount === 0) return false;
+  const stride = Math.max(1, Math.floor(pixelCount / COLOR_SAMPLE_TARGET));
+  let samples = 0;
+  let colored = 0;
+  for (let p = 0; p < pixelCount; p += stride) {
+    const i = p * 4;
+    const r = rgba[i]!;
+    const g = rgba[i + 1]!;
+    const b = rgba[i + 2]!;
+    const drg = r > g ? r - g : g - r;
+    const dgb = g > b ? g - b : b - g;
+    const drb = r > b ? r - b : b - r;
+    const m = drg > dgb ? (drg > drb ? drg : drb) : (dgb > drb ? dgb : drb);
+    if (m > COLOR_TOLERANCE) colored++;
+    samples++;
+  }
+  return colored / samples > COLOR_FRACTION;
+}
+
+function imageDataToDataURL(img: ImageData): string {
+  const c = document.createElement("canvas");
+  c.width = img.width;
+  c.height = img.height;
+  const ctx = c.getContext("2d");
+  if (!ctx) throw new Error("2D context unavailable for cartoon canvas");
+  ctx.putImageData(img, 0, 0);
+  return c.toDataURL("image/png");
+}
+
+function imageDataToGrayscale(img: ImageData): Uint8Array {
+  const data = img.data;
+  const out = new Uint8Array(img.width * img.height);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    out[j] = (data[i]! * 299 + data[i + 1]! * 587 + data[i + 2]! * 114) / 1000;
+  }
+  return out;
 }
 
 function threshold(gray: Uint8Array, t: number): Uint8Array {
