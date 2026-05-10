@@ -1,0 +1,128 @@
+:root {
+  --bg: #bee2f5;
+  --fg: #1f2328;
+  --muted: #57606a;
+  --accent: #0969da;
+  --border: #d0d7de;
+  --topbar-h: 48px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  height: 100%;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.back {
+  position: fixed;
+  top: 12px;
+  left: 14px;
+  z-index: 30;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.back:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 0 16px 0 96px;
+  background: rgba(255, 255, 255, 0.7);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+  z-index: 20;
+}
+
+.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.reset-btn {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  background: #f0c020;
+  color: #2c2418;
+  border: 1px solid #c89510;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.reset-btn:hover {
+  background: #ffd340;
+}
+
+.reset-btn:active {
+  transform: translateY(1px);
+}
+
+@media (max-width: 600px) {
+  .hint {
+    display: none;
+  }
+  .topbar {
+    padding-left: 80px;
+  }
+}
+
+.game {
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg);
+  touch-action: none;
+}
+
+.game canvas {
+  display: block;
+  touch-action: none;
+}
