@@ -31,6 +31,8 @@ export interface DrawerHandle {
   rect(): DOMRect;
   /** Tween a thumbnail "ghost" from a screen point back to its drawer slot. */
   animateReturn(id: string, fromClientX: number, fromClientY: number): Promise<void>;
+  /** Dim (or restore) a slot. Dimmed slots are non-interactable until restored. */
+  setSlotActive(id: string, active: boolean): void;
 }
 
 export function initDrawer(
@@ -77,6 +79,17 @@ export function initDrawer(
   function attachPointer(slot: HTMLElement, obj: DrawerObject, imgUrl: string) {
     slot.addEventListener("pointerdown", (e) => {
       if (e.button !== undefined && e.button !== 0) return;
+
+      // If this slot's live instance is still in play, refuse to drag —
+      // a brief shake hints to the user that the slot is "spent."
+      if (slot.classList.contains("drawer-slot-dimmed")) {
+        slot.classList.remove("drawer-slot-shake");
+        // Force reflow so the same animation can restart immediately.
+        void slot.offsetWidth;
+        slot.classList.add("drawer-slot-shake");
+        return;
+      }
+
       e.preventDefault();
       slot.setPointerCapture(e.pointerId);
 
@@ -111,11 +124,19 @@ export function initDrawer(
     ghost.style.transform = `translate(${x - 32}px, ${y - 32}px)`;
   }
 
+  function setSlotActive(id: string, active: boolean) {
+    const slot = slotByid.get(id);
+    if (!slot) return;
+    slot.classList.toggle("drawer-slot-dimmed", active);
+    if (!active) slot.classList.remove("drawer-slot-shake");
+  }
+
   return {
     element: root,
     rect: () => root.getBoundingClientRect(),
     animateReturn: (id, fromClientX, fromClientY) =>
       animateReturn(slotByid, ghost, id, fromClientX, fromClientY),
+    setSlotActive,
   };
 }
 

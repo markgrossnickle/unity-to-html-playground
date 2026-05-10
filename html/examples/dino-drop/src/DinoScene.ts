@@ -36,9 +36,7 @@ const VISUAL_SCALE = 0.7;
 // uniformly scaled by VISUAL_SCALE alongside the sprite (Phaser's
 // MatterImage.setScale scales both visual and body). The numbers below
 // describe roughly the visible silhouette of each thumbnail — not the
-// full 96×96 frame — so the collider hugs the art tightly rather than
-// approximating everything as a circle (which made the box roll like a
-// ball).
+// full 96×96 frame — so the collider hugs the art tightly.
 
 interface SpawnDef {
   shape: Phaser.Types.Physics.Matter.MatterSetBodyConfig;
@@ -47,6 +45,7 @@ interface SpawnDef {
   friction: number;
 }
 
+// Vertex helpers — return point arrays in art-space pixels, centered on (0,0).
 function ellipseVerts(rx: number, ry: number, n: number): Array<{ x: number; y: number }> {
   const out: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < n; i++) {
@@ -66,8 +65,8 @@ function starVerts(outer: number, inner: number, points: number): Array<{ x: num
   return out;
 }
 
-// Ice-cream outline: scoop arc on top, cone tip below. The shape is
-// authored convex so Matter doesn't have to invoke poly-decomp.
+// Ice-cream outline (single closed contour): scoop arc on top, cone below.
+// Kept convex so Matter doesn't have to invoke poly-decomp.
 const ICE_CREAM_VERTS: Array<{ x: number; y: number }> = [
   { x: -20, y: -8 },
   { x: -16, y: -22 },
@@ -85,13 +84,15 @@ const SPAWN_DEFS: Record<string, SpawnDef> = {
     friction: 0.04,
   },
   block: {
-    // Axis-aligned rectangle so the block doesn't roll.
+    // Axis-aligned rectangle — the WHOLE point of this fix is that the
+    // block must not roll like a ball.
     shape: { type: "rectangle", width: 60, height: 60 },
     density: 0.0045,
     restitution: 0.05,
     friction: 0.5,
   },
   triangle: {
+    // 3-vertex polygon — equilateral-ish, point up.
     shape: {
       type: "fromVerts",
       verts: [{ x: 0, y: -28 }, { x: 30, y: 22 }, { x: -30, y: 22 }],
@@ -102,7 +103,7 @@ const SPAWN_DEFS: Record<string, SpawnDef> = {
     friction: 0.1,
   },
   banana: {
-    // Elongated horizontal ellipse — capsule-like approximation.
+    // Elongated horizontal ellipse — "capsule-like" approximation.
     shape: {
       type: "fromVerts",
       verts: ellipseVerts(34, 14, 10),
@@ -113,7 +114,7 @@ const SPAWN_DEFS: Record<string, SpawnDef> = {
     friction: 0.06,
   },
   star: {
-    // 5-point star, 10 alternating verts. Concave; Matter decomposes
+    // 5-point star, 10 alternating verts. Concave; Matter decomposes it
     // via the bundled poly-decomp.
     shape: {
       type: "fromVerts",
@@ -132,7 +133,7 @@ const SPAWN_DEFS: Record<string, SpawnDef> = {
     friction: 0.4,
   },
   apple: {
-    // Slightly squished vertically.
+    // Slightly squished vertically — width > height by a touch.
     shape: {
       type: "fromVerts",
       verts: ellipseVerts(30, 27, 12),
@@ -157,7 +158,7 @@ const SPAWN_DEFS: Record<string, SpawnDef> = {
 interface DroppedBody extends Phaser.Physics.Matter.Image {
   /** Original drawer-object id, so the return tween knows which slot to fly to. */
   __dropId?: string;
-  /** True once the body has been launched by a slap and should clean up on its own. */
+  /** True once the body has been launched by a slam and should clean up on its own. */
   __returning?: boolean;
 }
 
@@ -176,6 +177,9 @@ export class DinoScene extends Phaser.Scene {
   private dynamicBodies = new Set<DroppedBody>();
   private slapInProgress = false;
 
+  // Per-id live instance: enforces one-of-each-at-a-time.
+  private activeById = new Map<string, DroppedBody>();
+
   // Pending spawns queued from the DOM drawer between create() resolutions.
   private pendingSpawn: { id: string; clientX: number; clientY: number } | null = null;
 
@@ -193,7 +197,8 @@ export class DinoScene extends Phaser.Scene {
     // Subtle gradient sky → grass.
     this.cameras.main.setBackgroundColor("#dff0c2");
 
-    // Build sprites first; setOrigin so rotation pivots around the tail base.
+    // Build sprites; tail origin = pivot point so rotation hinges at the
+    // tail base.
     this.bodySprite = this.add.image(0, 0, TEX_DINO_BODY).setOrigin(0, 0);
     this.tailSprite = this.add
       .image(0, 0, TEX_DINO_TAIL)
@@ -202,19 +207,19 @@ export class DinoScene extends Phaser.Scene {
         DINO_SILHOUETTE.tailPivot.y / DINO_SILHOUETTE.height
       );
 
-    // Tap detection on the body — uses the silhouette's tap-ellipse so the
-    // legs/tail tip don't trigger slaps.
-    this.bodySprite.setInteractive({
+    // Tap detection is on the TAIL sprite — tail slam clears the board.
+    // The body has no tap zone (per spec: body tap does nothing).
+    this.tailSprite.setInteractive({
       useHandCursor: true,
       hitArea: new Phaser.Geom.Ellipse(
-        DINO_SILHOUETTE.tapEllipse.cx,
-        DINO_SILHOUETTE.tapEllipse.cy,
-        DINO_SILHOUETTE.tapEllipse.rx * 2,
-        DINO_SILHOUETTE.tapEllipse.ry * 2
+        DINO_SILHOUETTE.tailTapEllipse.cx,
+        DINO_SILHOUETTE.tailTapEllipse.cy,
+        DINO_SILHOUETTE.tailTapEllipse.rx * 2,
+        DINO_SILHOUETTE.tailTapEllipse.ry * 2
       ),
       hitAreaCallback: Phaser.Geom.Ellipse.Contains,
     });
-    this.bodySprite.on("pointerdown", () => this.slap());
+    this.tailSprite.on("pointerdown", () => this.slam());
 
     this.layout();
     this.scale.on("resize", this.layout, this);
@@ -229,6 +234,9 @@ export class DinoScene extends Phaser.Scene {
 
   /** Called by main.ts when the user drops a thumbnail outside the drawer. */
   spawnAt(id: string, clientX: number, clientY: number): void {
+    // Reject if this id already has a live instance — the drawer should
+    // also block this at the source, but defend in depth.
+    if (this.activeById.has(id)) return;
     this.pendingSpawn = { id, clientX, clientY };
   }
 
@@ -335,6 +343,7 @@ export class DinoScene extends Phaser.Scene {
   }
 
   private spawnObjectAtClient(id: string, clientX: number, clientY: number): void {
+    if (this.activeById.has(id)) return;
     const def = SPAWN_DEFS[id];
     if (!def) return;
     const canvas = this.game.canvas;
@@ -356,75 +365,69 @@ export class DinoScene extends Phaser.Scene {
     body.setScale(VISUAL_SCALE);
     body.__dropId = id;
     this.dynamicBodies.add(body);
+    this.activeById.set(id, body);
+    this.drawer?.setSlotActive(id, true);
   }
 
-  // ---- slap -------------------------------------------------------------
+  // ---- slam --------------------------------------------------------------
 
-  private slap(): void {
+  private slam(): void {
     if (this.slapInProgress) return;
     this.slapInProgress = true;
-    this.bodySprite.disableInteractive();
+    this.tailSprite.disableInteractive();
 
-    // Tail tween: rotate up sharply (tail tip swings up and over), then back.
-    // The tail sprite faces left in art-space so a NEGATIVE rotation lifts
-    // the tip upward when viewed in screen-space.
-    this.tweens.add({
+    // Chained tail tween — sharp downward thunk, then bouncy return.
+    //  +π/4 ≈ +45° rotates the tail tip toward the ground.
+    this.tweens.chain({
       targets: this.tailSprite,
-      rotation: -1.05,
-      duration: 100,
-      ease: "Quad.easeOut",
-      yoyo: true,
-      hold: 0,
+      tweens: [
+        { rotation: Math.PI / 4, duration: 150, ease: "Quad.easeOut" },
+        { rotation: 0, duration: 250, ease: "Bounce.easeOut" },
+      ],
       onComplete: () => this.tailSprite.setRotation(0),
     });
 
-    // Slight body tilt — looks tired during recovery.
+    // Slight body recoil while the tail slams.
     this.tweens.add({
       targets: this.bodySprite,
-      angle: -2,
-      duration: 100,
+      angle: -1.5,
+      duration: 150,
       ease: "Quad.easeOut",
       yoyo: true,
-      hold: 400,
+      hold: 80,
     });
 
-    // Launch every dynamic object on the scene.
+    // Strong upward impulse + wide horizontal scatter on every live body.
     for (const b of this.dynamicBodies) {
       if (b.__returning) continue;
-      const px = b.x;
-      const horizontal = (Math.random() - 0.3) * 6; // mostly to the right
-      const upward = -10 - Math.random() * 4;
-      // Body type — Phaser exposes Matter body via `.body`.
+      const horizontal = (Math.random() - 0.3) * 8; // mostly to the right
+      const upward = -12 - Math.random() * 5;
       const body = (b.body as MatterJS.BodyType) ?? null;
       if (body) {
         this.matter.body.setVelocity(body, { x: horizontal, y: upward });
-        this.matter.body.setAngularVelocity(body, (Math.random() - 0.5) * 0.4);
+        this.matter.body.setAngularVelocity(body, (Math.random() - 0.5) * 0.5);
       }
       b.__returning = true;
-      // Schedule a return-to-drawer tween. The return runs whether the body
-      // has flown off-screen or is still mid-air after 600ms.
-      this.time.delayedCall(600, () => this.returnToDrawer(b));
-      // Also clean up early if it leaves the canvas before 600ms.
-      b.setData("offscreenChecker", true);
+      // Time-limited fallback — even if a body lands back on the dino
+      // instead of clearing the canvas, force its return after 650ms.
+      this.time.delayedCall(650, () => this.returnToDrawer(b));
     }
 
-    // After the slap, re-enable the body once all returns are done.
-    this.time.delayedCall(900, () => {
-      // If nothing was launched (no dynamic objects), restore immediately.
+    // Re-enable the tail once the slam recovers, even if there was
+    // nothing to launch.
+    this.time.delayedCall(450, () => {
       if (this.dynamicBodies.size === 0) {
         this.slapInProgress = false;
-        this.bodySprite.setInteractive();
+        this.tailSprite.setInteractive();
       }
     });
   }
 
   override update(): void {
-    // Off-screen cleanup: any returning body that has fully exited the
-    // canvas gets returned-to-drawer immediately, so the slot fills back
-    // up faster than waiting for the 600ms timer.
+    // Off-screen recovery: any body that exits the play area returns
+    // to its drawer slot, whether it was slammed or just bounced wrong.
     const cam = this.cameras.main;
     for (const b of this.dynamicBodies) {
-      if (!b.__returning) continue;
       if (
         b.x < -120 ||
         b.x > cam.width + 120 ||
@@ -439,8 +442,11 @@ export class DinoScene extends Phaser.Scene {
   private returnToDrawer(b: DroppedBody): void {
     if (!this.dynamicBodies.has(b)) return;
     this.dynamicBodies.delete(b);
-
     const id = b.__dropId ?? "";
+    if (id && this.activeById.get(id) === b) {
+      this.activeById.delete(id);
+    }
+
     const canvas = this.game.canvas;
     const rect = canvas.getBoundingClientRect();
     // Convert body's last canvas position into client (page) coordinates so
@@ -455,13 +461,16 @@ export class DinoScene extends Phaser.Scene {
       this.maybeRestoreDino();
       return;
     }
-    drawer.animateReturn(id, startX, startY).then(() => this.maybeRestoreDino());
+    drawer.animateReturn(id, startX, startY).then(() => {
+      drawer.setSlotActive(id, false);
+      this.maybeRestoreDino();
+    });
   }
 
   private maybeRestoreDino(): void {
     if (!this.slapInProgress) return;
     if (this.dynamicBodies.size > 0) return;
     this.slapInProgress = false;
-    this.bodySprite.setInteractive();
+    this.tailSprite.setInteractive();
   }
 }

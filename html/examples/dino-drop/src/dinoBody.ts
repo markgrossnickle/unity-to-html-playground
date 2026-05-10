@@ -32,9 +32,19 @@ export interface DinoSilhouette {
   readonly tailStart: number;
   // Top-edge contour, off-screen-left first → tail-tip last.
   readonly points: ReadonlyArray<{ x: number; y: number }>;
-  // Tap-target ellipse for the body (used to detect taps on the back hump
-  // — NOT on the slide, so tapping the slide doesn't trigger a slap).
+  // Tap-target ellipse for the body (kept for layout debugging; the body
+  // itself is non-interactive — only the tail triggers the slam).
   readonly tapEllipse: {
+    cx: number;
+    cy: number;
+    rx: number;
+    ry: number;
+  };
+  // Tap-target ellipse for the TAIL (defined in the body sprite's local
+  // art-space — Phaser hit areas are pre-rotation, so this covers the
+  // tail-slide arc from where the tail leaves the body to the tip on
+  // the ground).
+  readonly tailTapEllipse: {
     cx: number;
     cy: number;
     rx: number;
@@ -85,5 +95,14 @@ export const DINO_SILHOUETTE: DinoSilhouette = {
     cy: sy(140),
     rx: sx(200),
     ry: sy(100),
+  },
+  tailTapEllipse: {
+    // Covers the tail-slide arc, from just past the tail base (~art-x=460)
+    // out to the tip (~art-x=1196). Slightly oversized vertically so the
+    // user can reliably tap the diagonal slide.
+    cx: sx(820),
+    cy: sy(350),
+    rx: sx(420),
+    ry: sy(180),
   },
 };
