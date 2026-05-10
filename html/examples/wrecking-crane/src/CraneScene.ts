@@ -25,7 +25,7 @@ const GROUND_Y = 820;
 const TOWER_X = 220;
 const PIVOT_Y = 240;
 const ARM_LEN = 420; // distance from pivot to the tip-anchor in world units
-const CHAIN_LEN = 220;
+const CHAIN_LEN = 380;
 const BALL_RADIUS = 36;
 
 // Arm swing range, in radians from horizontal-right (+x axis, Phaser
