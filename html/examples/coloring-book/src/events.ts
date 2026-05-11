@@ -3,9 +3,12 @@
 // cleaner than wiring shared module-level callbacks and avoids a global state
 // library for what is essentially "two surfaces talk to each other".
 
+export type Tool = "bucket" | "pencil" | "brush" | "eraser";
+
 export interface EventMap {
   "picture:select": string; // slug
   "color:select": string; // hex
+  "tool:select": Tool;
   undo: void;
   clear: void;
   save: void;

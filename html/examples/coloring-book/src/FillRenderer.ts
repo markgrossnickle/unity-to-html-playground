@@ -1,15 +1,15 @@
 import { LabelMap } from "./LabelMap";
 import { hexToRGB } from "./color";
 
-// Owns the off-screen canvas that holds the per-pixel fill colors. The Phaser
-// scene wraps this canvas as a CanvasTexture and displays it under the lines
-// PNG. Every redraw is a full pass over the label map; at 512² that's ~262K
-// iterations and well under a frame.
+// Owns the off-screen canvas that holds every painted pixel — bucket fills
+// AND pencil/brush/eraser strokes. The Phaser scene wraps this canvas as a
+// CanvasTexture and displays it under the lines PNG (multiply blend in the
+// imported-picture case). After construction the canvas is the source of
+// truth: the scene paints incrementally and uses ImageData snapshots to undo.
 
 export class FillRenderer {
   readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly imageData: ImageData;
 
   constructor(width: number, height: number) {
     this.canvas = document.createElement("canvas");
@@ -18,78 +18,112 @@ export class FillRenderer {
     const ctx = this.canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) throw new Error("2D context unavailable for fill canvas");
     this.ctx = ctx;
-    this.imageData = ctx.createImageData(width, height);
   }
 
-  render(labelMap: LabelMap, fillMap: Map<number, string>): void {
-    // Lookup table indexed by region id. Faster than Map.get inside the
-    // hot loop and bounded (we use one byte for region id, so 256 slots).
-    const colors: Array<readonly [number, number, number] | undefined> = new Array(
-      256
-    );
-    for (const [id, hex] of fillMap) colors[id] = hexToRGB(hex);
+  clear(): void {
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
 
+  snapshot(): ImageData {
+    return this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  restore(snap: ImageData): void {
+    this.ctx.putImageData(snap, 0, 0);
+  }
+
+  // Paint a single label-map region in `hex`, on top of whatever is already
+  // on the canvas. Existing pixels (other fills, strokes) are preserved
+  // outside the painted region, and the parser's 1px erode ring is filled in
+  // by a one-pass dilation seeded from JUST these pixels — so existing
+  // strokes don't grow on each fill.
+  paintRegion(labelMap: LabelMap, regionId: number, hex: string): void {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const img = this.ctx.getImageData(0, 0, w, h);
+    const out = img.data;
     const labels = labelMap.data;
-    const out = this.imageData.data;
     const len = labels.length;
+    const [r, g, b] = hexToRGB(hex);
 
-    for (let i = 0; i < len; i += 4) {
-      const a = labels[i + 3]!;
-      if (a === 0) {
-        out[i + 3] = 0;
-        continue;
-      }
-      const id = labels[i]!;
-      const c = colors[id];
-      if (!c) {
-        out[i + 3] = 0;
-        continue;
-      }
-      out[i] = c[0];
-      out[i + 1] = c[1];
-      out[i + 2] = c[2];
+    const justPainted = new Uint8Array(w * h);
+    for (let i = 0, p = 0; i < len; i += 4, p++) {
+      if (labels[i + 3]! === 0) continue;
+      if (labels[i]! !== regionId) continue;
+      out[i] = r;
+      out[i + 1] = g;
+      out[i + 2] = b;
       out[i + 3] = 255;
+      justPainted[p] = 1;
     }
 
-    // Dilate the painted pixels by 1px to fill the antialiased ring left by
-    // the parser's erode pass. Without this, the 1px edge of each region
-    // shows the source image's white interior unchanged, producing a white
-    // halo around every fill. The outline overlay is multiplied on top, so
-    // dilating into the outline pixels is harmless — black × any color = black.
-    this.dilateOnce(labelMap.width, labelMap.height);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const p = row + x;
+        if (justPainted[p]) continue;
+        const o4 = p * 4;
+        if (out[o4 + 3]! !== 0) continue;
+        let donor = -1;
+        if (x > 0 && justPainted[p - 1]) donor = p - 1;
+        else if (x < w - 1 && justPainted[p + 1]) donor = p + 1;
+        else if (y > 0 && justPainted[p - w]) donor = p - w;
+        else if (y < h - 1 && justPainted[p + w]) donor = p + w;
+        if (donor < 0) continue;
+        const d4 = donor * 4;
+        out[o4] = out[d4]!;
+        out[o4 + 1] = out[d4 + 1]!;
+        out[o4 + 2] = out[d4 + 2]!;
+        out[o4 + 3] = 255;
+      }
+    }
 
-    this.ctx.putImageData(this.imageData, 0, 0);
+    this.ctx.putImageData(img, 0, 0);
   }
 
-  private dilateOnce(width: number, height: number): void {
-    const out = this.imageData.data;
-    const total = width * height;
-
-    // Snapshot which pixels were filled before dilation; we only spread from
-    // those, never from a pixel we just dilated, so the ring stays exactly 1px.
-    const filled = new Uint8Array(total);
-    for (let p = 0; p < total; p++) {
-      if (out[p * 4 + 3]! > 0) filled[p] = 1;
+  // Stroke API — pencil/brush/eraser. The scene calls strokeBegin on
+  // pointerdown, strokeTo on each pointermove, strokeEnd on pointerup. We
+  // re-anchor the path at every move so each segment costs O(1) to render
+  // instead of O(strokes-so-far); the round line cap on consecutive
+  // segments visually merges them into a continuous stroke.
+  strokeBegin(opts: {
+    x: number;
+    y: number;
+    color: string;
+    width: number;
+    erase: boolean;
+  }): void {
+    const c = this.ctx;
+    c.save();
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.lineWidth = opts.width;
+    if (opts.erase) {
+      c.globalCompositeOperation = "destination-out";
+      c.strokeStyle = "rgba(0,0,0,1)";
+    } else {
+      c.globalCompositeOperation = "source-over";
+      c.strokeStyle = opts.color;
     }
+    c.beginPath();
+    c.moveTo(opts.x, opts.y);
+    // Degenerate line so a tap-without-drag still renders a round dot the
+    // size of the stroke.
+    c.lineTo(opts.x, opts.y);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(opts.x, opts.y);
+  }
 
-    for (let y = 0; y < height; y++) {
-      const rowStart = y * width;
-      for (let x = 0; x < width; x++) {
-        const p = rowStart + x;
-        if (filled[p]) continue;
-        let donor = -1;
-        if (x > 0 && filled[p - 1]) donor = p - 1;
-        else if (x < width - 1 && filled[p + 1]) donor = p + 1;
-        else if (y > 0 && filled[p - width]) donor = p - width;
-        else if (y < height - 1 && filled[p + width]) donor = p + width;
-        if (donor < 0) continue;
-        const o = p * 4;
-        const d = donor * 4;
-        out[o] = out[d]!;
-        out[o + 1] = out[d + 1]!;
-        out[o + 2] = out[d + 2]!;
-        out[o + 3] = 255;
-      }
-    }
+  strokeTo(x: number, y: number): void {
+    const c = this.ctx;
+    c.lineTo(x, y);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(x, y);
+  }
+
+  strokeEnd(): void {
+    this.ctx.restore();
   }
 }

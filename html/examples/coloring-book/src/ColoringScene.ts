@@ -1,24 +1,37 @@
 import Phaser from "phaser";
 
-import { events } from "./events";
+import { events, type Tool } from "./events";
 import { FillRenderer } from "./FillRenderer";
 import { LabelMap } from "./LabelMap";
 import { findPicture, PICTURES, type Picture, getAllPictures } from "./pictures";
 import { exportPng, saveOrShare } from "./save";
 import {
   addRecentColor,
-  popFill,
-  pushFill,
+  popSnapshot,
+  pushSnapshot,
   resetForPicture,
   state,
 } from "./state";
 
 const FILL_TEXTURE_KEY = "coloring-book:fill";
 
+type FreehandTool = Exclude<Tool, "bucket">;
+
+interface FreehandConfig {
+  width: number; // px in picture-local coordinates
+  erase: boolean;
+}
+
+const FREEHAND: Record<FreehandTool, FreehandConfig> = {
+  pencil: { width: 3, erase: false },
+  brush: { width: 16, erase: false },
+  eraser: { width: 20, erase: true },
+};
+
 // Single Phaser scene that owns:
-//   - the underlying fill canvas (CanvasTexture)
+//   - the underlying fill canvas (CanvasTexture) shared by all four tools
 //   - the lines image drawn on top
-//   - tap-to-fill input
+//   - tap-to-fill + drag-to-draw input
 //   - layout (centered + letterboxed inside the available game area)
 export class ColoringScene extends Phaser.Scene {
   private container!: Phaser.GameObjects.Container;
@@ -27,6 +40,15 @@ export class ColoringScene extends Phaser.Scene {
   private labelMap: LabelMap | null = null;
   private fillRenderer: FillRenderer | null = null;
   private currentPicture: Picture | null = null;
+
+  // Non-null between pointerdown and pointerup of a freehand stroke. Pointer
+  // ID pins the stroke to the original finger so a second touch doesn't
+  // hijack it mid-drag.
+  private activeStroke: {
+    pointerId: number;
+    lastX: number;
+    lastY: number;
+  } | null = null;
 
   constructor() {
     super("ColoringScene");
@@ -65,10 +87,14 @@ export class ColoringScene extends Phaser.Scene {
       void this.save();
     });
 
-    // pointerdown — not pointerup or drag — so a real "tap" registers and a
-    // panning gesture (when we add zoom in M3) won't accidentally fill.
-    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) =>
-      this.onTap(pointer)
+    this.input.on("pointerdown", (p: Phaser.Input.Pointer) =>
+      this.onPointerDown(p)
+    );
+    this.input.on("pointermove", (p: Phaser.Input.Pointer) =>
+      this.onPointerMove(p)
+    );
+    this.input.on("pointerup", (p: Phaser.Input.Pointer) =>
+      this.onPointerUp(p)
     );
 
     this.loadPicture(PICTURES[0]!.slug);
@@ -99,6 +125,7 @@ export class ColoringScene extends Phaser.Scene {
   private applyPicture(picture: Picture): void {
     this.currentPicture = picture;
     resetForPicture(picture.slug);
+    this.activeStroke = null;
 
     // Clean up the previous picture's display objects + cached fill texture.
     this.container.removeAll(true);
@@ -131,7 +158,7 @@ export class ColoringScene extends Phaser.Scene {
     this.container.add([this.fillImage, this.linesImage]);
 
     this.layout();
-    this.redraw();
+    this.refreshTexture();
   }
 
   // Letterbox: fit the picture inside the viewport with a margin, preserving
@@ -153,25 +180,85 @@ export class ColoringScene extends Phaser.Scene {
     );
   }
 
-  private onTap(pointer: Phaser.Input.Pointer): void {
+  private toLocal(pointer: Phaser.Input.Pointer): { x: number; y: number } {
+    const local = this.container
+      .getLocalTransformMatrix()
+      .applyInverse(pointer.x, pointer.y);
+    return { x: local.x, y: local.y };
+  }
+
+  private onPointerDown(pointer: Phaser.Input.Pointer): void {
     if (!this.labelMap || !this.fillRenderer) return;
+    const tool = state.selectedTool;
+    if (tool === "bucket") {
+      this.doBucketFill(pointer);
+      return;
+    }
+    this.beginStroke(pointer, tool);
+  }
 
-    // Container space → image-local pixel coordinates.
-    const local = this.container.getLocalTransformMatrix().applyInverse(pointer.x, pointer.y);
-    const x = Math.floor(local.x);
-    const y = Math.floor(local.y);
+  private onPointerMove(pointer: Phaser.Input.Pointer): void {
+    const stroke = this.activeStroke;
+    if (!stroke || !this.fillRenderer) return;
+    if (pointer.pointerId !== stroke.pointerId) return;
+    const { x, y } = this.toLocal(pointer);
+    // Sub-pixel jitter doesn't add visible detail and hammers getImageData
+    // for nothing — gate on a 0.5px move.
+    const dx = x - stroke.lastX;
+    const dy = y - stroke.lastY;
+    if (dx * dx + dy * dy < 0.25) return;
+    this.fillRenderer.strokeTo(x, y);
+    stroke.lastX = x;
+    stroke.lastY = y;
+    this.refreshTexture();
+  }
 
-    const regionId = this.labelMap.sample(x, y);
+  private onPointerUp(pointer: Phaser.Input.Pointer): void {
+    const stroke = this.activeStroke;
+    if (!stroke || !this.fillRenderer) return;
+    if (pointer.pointerId !== stroke.pointerId) return;
+    this.fillRenderer.strokeEnd();
+    this.activeStroke = null;
+    this.refreshTexture();
+  }
+
+  private doBucketFill(pointer: Phaser.Input.Pointer): void {
+    if (!this.labelMap || !this.fillRenderer) return;
+    const { x, y } = this.toLocal(pointer);
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const regionId = this.labelMap.sample(xi, yi);
     if (regionId === 0) return;
+    pushSnapshot(this.fillRenderer.snapshot());
+    this.fillRenderer.paintRegion(this.labelMap, regionId, state.selectedColor);
+    addRecentColor(state.selectedColor);
+    this.refreshTexture();
+  }
 
-    const previous = state.fillMap.get(regionId);
-    const next = state.selectedColor;
-    if (previous === next) return; // no-op tap on already-this-color region
-
-    pushFill({ regionId, from: previous, to: next });
-    state.fillMap.set(regionId, next);
-    addRecentColor(next);
-    this.redraw();
+  private beginStroke(pointer: Phaser.Input.Pointer, tool: FreehandTool): void {
+    if (!this.labelMap || !this.fillRenderer) return;
+    if (this.activeStroke) return; // ignore additional touches mid-stroke
+    const { x, y } = this.toLocal(pointer);
+    if (
+      x < 0 ||
+      y < 0 ||
+      x >= this.labelMap.width ||
+      y >= this.labelMap.height
+    ) {
+      return;
+    }
+    const cfg = FREEHAND[tool];
+    pushSnapshot(this.fillRenderer.snapshot());
+    this.fillRenderer.strokeBegin({
+      x,
+      y,
+      color: state.selectedColor,
+      width: cfg.width,
+      erase: cfg.erase,
+    });
+    if (!cfg.erase) addRecentColor(state.selectedColor);
+    this.activeStroke = { pointerId: pointer.pointerId, lastX: x, lastY: y };
+    this.refreshTexture();
   }
 
   private onPictureRemoved(slug: string): void {
@@ -187,18 +274,30 @@ export class ColoringScene extends Phaser.Scene {
   }
 
   private undo(): void {
-    const cmd = popFill();
-    if (!cmd) return;
-    if (cmd.from === undefined) state.fillMap.delete(cmd.regionId);
-    else state.fillMap.set(cmd.regionId, cmd.from);
-    this.redraw();
+    if (!this.fillRenderer) return;
+    const snap = popSnapshot();
+    if (!snap) return;
+    // If undo lands while a stroke is in flight (shouldn't happen — undo is
+    // a topbar click — but be safe), tear it down so the next move doesn't
+    // resume on top of the restored canvas.
+    if (this.activeStroke) {
+      this.fillRenderer.strokeEnd();
+      this.activeStroke = null;
+    }
+    this.fillRenderer.restore(snap);
+    this.refreshTexture();
   }
 
   private clearPaint(): void {
-    if (state.fillMap.size === 0) return;
-    state.fillMap = new Map();
-    state.history = [];
-    this.redraw();
+    if (!this.fillRenderer) return;
+    if (state.history.length === 0 && !this.activeStroke) return;
+    if (this.activeStroke) {
+      this.fillRenderer.strokeEnd();
+      this.activeStroke = null;
+    }
+    pushSnapshot(this.fillRenderer.snapshot());
+    this.fillRenderer.clear();
+    this.refreshTexture();
   }
 
   private async save(): Promise<void> {
@@ -216,10 +315,10 @@ export class ColoringScene extends Phaser.Scene {
     await saveOrShare(this.currentPicture.slug, blob);
   }
 
-  private redraw(): void {
-    if (!this.labelMap || !this.fillRenderer) return;
-    this.fillRenderer.render(this.labelMap, state.fillMap);
-    const tex = this.textures.get(FILL_TEXTURE_KEY) as Phaser.Textures.CanvasTexture;
-    tex.refresh();
+  private refreshTexture(): void {
+    const tex = this.textures.get(FILL_TEXTURE_KEY) as
+      | Phaser.Textures.CanvasTexture
+      | undefined;
+    if (tex) tex.refresh();
   }
 }
