@@ -4,10 +4,12 @@ import { ColoringScene } from "./src/ColoringScene";
 import { initPalette } from "./src/palette";
 import { initPicker } from "./src/picker";
 import { initToolbar } from "./src/toolbar";
+import { initTools } from "./src/tools";
 
 initPalette();
 initPicker();
 initToolbar();
+initTools();
 
 new Phaser.Game({
   type: Phaser.AUTO,

@@ -213,6 +213,46 @@ body {
   border-radius: 10px;
 }
 
+/* ---------- tool picker ---------- */
+
+.tool-row {
+  display: flex;
+  gap: 8px;
+}
+
+.tool {
+  /* ≥44 px tap target — same target spec as the swatches */
+  width: 56px;
+  height: 56px;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 26px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    transform 0.08s ease,
+    box-shadow 0.08s ease,
+    border-color 0.08s ease;
+}
+
+.tool:hover {
+  transform: scale(1.05);
+  border-color: var(--accent);
+}
+
+.tool.selected {
+  border-color: var(--accent);
+  background: rgba(9, 105, 218, 0.12);
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
 /* ---------- picker modal ---------- */
 
 .picker {
