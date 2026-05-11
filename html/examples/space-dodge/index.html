@@ -15,7 +15,12 @@
       <h1 class="title">Space Dodge</h1>
       <span class="hint">Touch or drag anywhere — the ship follows your finger.</span>
     </div>
-    <div id="game" class="game"></div>
+    <div id="game" class="game">
+      <div id="start-overlay" class="start-overlay" role="button" aria-label="Tap to start">
+        <img class="start-overlay__icon" src="./assets/ship.png" alt="" />
+        <div class="start-overlay__title">Tap to start</div>
+      </div>
+    </div>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

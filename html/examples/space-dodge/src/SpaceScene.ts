@@ -58,14 +58,18 @@ export class SpaceScene extends Phaser.Scene {
   private invincibleUntil = 0;
   private spawnTimerMs = 0;
   private isGameOver = false;
-  private engineStarted = false;
+  private running = false;
 
   // HUD
   private hearts: Phaser.GameObjects.Image[] = [];
   private scoreText!: Phaser.GameObjects.Text;
 
-  // Game-over overlay
+  // Game-over overlay (Phaser, inside canvas)
   private overlay: Phaser.GameObjects.Container | null = null;
+
+  // Tap-to-start overlay (DOM, above canvas)
+  private startOverlay: HTMLElement | null = null;
+  private startOverlayHandler: ((ev: Event) => void) | null = null;
 
   constructor() {
     super("SpaceScene");
@@ -99,21 +103,50 @@ export class SpaceScene extends Phaser.Scene {
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.onPointer, this);
     this.input.on(Phaser.Input.Events.POINTER_MOVE, this.onPointer, this);
 
+    // DOM tap-to-start overlay. The first tap is the user-gesture Web Audio
+    // requires — we MUST init the AudioContext from this handler.
+    this.startOverlay = document.getElementById("start-overlay");
+    if (this.startOverlay) {
+      const handler = (ev: Event): void => {
+        ev.preventDefault();
+        this.start();
+      };
+      this.startOverlayHandler = handler;
+      this.startOverlay.addEventListener("pointerdown", handler);
+    }
+
     // Tear down listeners when the scene shuts down (so a manual restart
     // doesn't double-register handlers).
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off(Phaser.Scale.Events.RESIZE, this.onResize, this);
+      if (this.startOverlay && this.startOverlayHandler) {
+        this.startOverlay.removeEventListener(
+          "pointerdown",
+          this.startOverlayHandler
+        );
+      }
       Audio.stopEngine();
     });
   }
 
+  private start(): void {
+    if (this.running) return;
+    Audio.init();
+    Audio.startEngine();
+    this.running = true;
+    this.hideStartOverlay();
+  }
+
+  private showStartOverlay(): void {
+    if (this.startOverlay) this.startOverlay.classList.remove("hidden");
+  }
+
+  private hideStartOverlay(): void {
+    if (this.startOverlay) this.startOverlay.classList.add("hidden");
+  }
+
   private onPointer(pointer: Phaser.Input.Pointer): void {
-    if (!this.engineStarted) {
-      Audio.init();
-      Audio.startEngine();
-      this.engineStarted = true;
-    }
-    if (this.isGameOver) return;
+    if (!this.running || this.isGameOver) return;
     this.shipTargetX = pointer.x;
   }
 
@@ -209,18 +242,22 @@ export class SpaceScene extends Phaser.Scene {
     const dt = delta / 1000;
     const { width, height } = this.scale.gameSize;
 
-    // Smooth-follow horizontal position.
-    if (!this.isGameOver) {
+    // Smooth-follow horizontal position — only while running.
+    if (this.running && !this.isGameOver) {
       this.ship.x = Phaser.Math.Linear(this.ship.x, this.shipTargetX, SHIP_FOLLOW_LERP);
       this.ship.x = Phaser.Math.Clamp(this.ship.x, 16, width - 16);
     }
 
-    const scroll = Math.min(MAX_SCROLL, BASE_SCROLL + this.score * SCROLL_RAMP_PER_POINT);
+    // Scrolling, spawning, and asteroid motion are gated by `running` so the
+    // scene sits at rest until the user taps the start overlay.
+    const scroll = this.running
+      ? Math.min(MAX_SCROLL, BASE_SCROLL + this.score * SCROLL_RAMP_PER_POINT)
+      : 0;
 
-    this.updateStars(dt, scroll, height, width);
+    if (this.running) this.updateStars(dt, scroll, height, width);
     this.drawStars();
 
-    if (!this.isGameOver) {
+    if (this.running && !this.isGameOver) {
       this.spawnTimerMs -= delta;
       if (this.spawnTimerMs <= 0) {
         this.spawnAsteroid(width);
@@ -232,10 +269,10 @@ export class SpaceScene extends Phaser.Scene {
       }
     }
 
-    this.updateAsteroids(dt, scroll, height);
+    if (this.running) this.updateAsteroids(dt, scroll, height);
 
     // Collision check — circle vs ship (skip during invincibility).
-    if (!this.isGameOver && this.time.now > this.invincibleUntil) {
+    if (this.running && !this.isGameOver && this.time.now > this.invincibleUntil) {
       this.checkCollisions();
     }
 
@@ -411,8 +448,14 @@ export class SpaceScene extends Phaser.Scene {
     this.invincibleUntil = 0;
     this.spawnTimerMs = 0;
     this.isGameOver = false;
+    this.running = false;
     this.scoreText.setText("0");
     this.ship.alpha = 1;
+
+    // Recenter ship so the next round starts from the same resting pose.
+    const { width } = this.scale.gameSize;
+    this.ship.x = width / 2;
+    this.shipTargetX = this.ship.x;
 
     for (const h of this.hearts) h.destroy();
     this.hearts = [];
@@ -421,8 +464,9 @@ export class SpaceScene extends Phaser.Scene {
       h.setDepth(20);
       this.hearts.push(h);
     }
-    this.layoutHud(this.scale.gameSize.width);
+    this.layoutHud(width);
 
-    if (this.engineStarted) Audio.startEngine();
+    // Re-show the tap-to-start gate; the next tap starts audio + motion again.
+    this.showStartOverlay();
   }
 }
